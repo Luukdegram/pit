@@ -240,7 +240,7 @@ fn open(self: *Self, file_path: []const u8) !void {
 
         // append the line to our text buffer
         const text = try self.gpa.dupe(u8, real_line);
-        var row = TextBuffer.TextRow.init(text);
+        var row = try TextBuffer.TextRow.init(text, self.gpa);
         try row.update(self.gpa);
         try text_buffer.append(self.gpa, row);
     }

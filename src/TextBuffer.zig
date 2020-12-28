@@ -7,17 +7,37 @@ const TextBuffer = @This();
 /// on a per-line basis
 pub const TextRow = struct {
     raw: []u8,
-    renderable: []const u8,
+    renderable: []u8,
 
     /// Creates a new TextRow instance
     /// User must manage `input`'s memory
-    pub fn init(input: []u8) TextRow {
-        return .{ .raw = input, .renderable = undefined };
+    pub fn init(input: []u8, gpa: *Allocator) error{OutOfMemory}!TextRow {
+        return TextRow{ .raw = input, .renderable = try gpa.dupe(u8, input) };
     }
 
     /// Updates the renderable text with the raw text
     pub fn update(self: *TextRow, gpa: *Allocator) error{OutOfMemory}!void {
-        self.renderable = try gpa.dupe(u8, self.raw);
+        var tabs: u32 = 0;
+
+        for (self.raw) |raw| tabs += if (raw == '\t') @as(u32, 1) else 0;
+        gpa.free(self.renderable);
+
+        // each tab is 4 spaces
+        self.renderable = try gpa.alloc(u8, self.raw.len + tabs * 3 + 1);
+
+        var i: usize = 0;
+        while (i < self.raw.len) {
+            const c = self.raw[i];
+
+            if (c == '\t') {
+                self.renderable[i] = ' ';
+                i += 1;
+                while (i % 4 != 0) : (i += 1) self.renderable[i] = ' ';
+            } else {
+                self.renderable[i] = c;
+                i += 1;
+            }
+        }
     }
 
     /// Returns the length of the renderable text
