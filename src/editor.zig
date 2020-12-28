@@ -1,5 +1,6 @@
 const std = @import("std");
 const term = @import("term.zig");
+const TextBuffer = @import("TextBuffer.zig");
 const os = std.os;
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
@@ -10,12 +11,13 @@ usingnamespace @import("keys.zig");
 
 width: u16,
 height: u16,
-x: u16,
-y: u16,
-text: std.ArrayListUnmanaged(TextRow),
+x: u16 = 0,
+y: u16 = 0,
 gpa: *Allocator,
-row_offset: u32,
-col_offset: u32,
+row_offset: u32 = 0,
+col_offset: u32 = 0,
+buffers: std.ArrayListUnmanaged(TextBuffer),
+active: usize = 0,
 
 /// Mutable slice of characters
 const TextRow = []u8;
@@ -30,12 +32,8 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     var self = Self{
         .width = size.width,
         .height = size.height,
-        .x = 0,
-        .y = 0,
-        .text = std.ArrayListUnmanaged(TextRow){},
         .gpa = gpa,
-        .row_offset = 0,
-        .col_offset = 0,
+        .buffers = std.ArrayListUnmanaged(TextBuffer){},
     };
     defer self.deinit();
 
@@ -65,9 +63,18 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
 /// Frees the memory of all buffers
 fn deinit(self: *Self) void {
-    for (self.text.items) |line| self.gpa.free(line);
-    self.text.deinit(self.gpa);
+    for (self.buffers.items) |*b| b.deinit(self.gpa);
+    self.buffers.deinit(self.gpa);
     self.* = undefined;
+}
+
+/// Returns the currently active TextBuffer
+/// Asserts atleast 1 buffer exists and the
+/// `active` index is not out of bounds
+fn buffer(self: *Self) *TextBuffer {
+    std.debug.assert(self.buffers.items.len > 0);
+    std.debug.assert(self.active < self.buffers.items.len);
+    return &self.buffers.items[self.active];
 }
 
 /// Blocking function. Reads from stdin and returns the character
@@ -134,27 +141,27 @@ fn update(self: *Self) os.WriteError!void {
 }
 
 /// Draws the contents of the buffer in the terminal
-fn drawBuffer(self: Self) os.WriteError!void {
+fn drawBuffer(self: *Self) os.WriteError!void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
         const offset = i + self.row_offset;
-        if (offset >= self.text.items.len) {
-            if (self.text.items.len == 0 and
+        if (offset >= self.buffer().len()) {
+            if (self.buffer().len() == 0 and
                 i == self.height / 3)
                 try self.startupMessage()
             else
                 try term.write("~");
         } else {
-            const line = self.text.items[offset];
+            const line = self.buffer().get(offset);
 
             const len = blk: {
-                if (line.len - self.col_offset < 0) break :blk 0;
-                var line_len = line.len - self.col_offset;
+                if (line.len() - self.col_offset < 0) break :blk 0;
+                var line_len = line.len() - self.col_offset;
 
                 if (line_len > self.width) line_len = self.width;
                 break :blk line_len;
             };
-            try term.write(line[0..len]);
+            try term.write(line.renderable[0..len]);
         }
 
         try term.sequence("K");
@@ -185,20 +192,20 @@ fn handleMovement(self: *Self, key: Key) void {
                 self.x -= 1
             else if (self.y > 0) {
                 self.y -= 1;
-                self.x = @intCast(u16, self.text.items[self.y].len);
+                self.x = @intCast(u16, self.buffer().get(self.y).len());
             }
         },
         .arrow_down, @intToEnum(Key, 'j') => {
-            if (self.y < self.text.items.len) self.y += 1;
+            if (self.y < self.buffer().len()) self.y += 1;
         },
         .arrow_up, @intToEnum(Key, 'k') => {
             if (self.y != 0) self.y -= 1;
         },
         .arrow_right, @intToEnum(Key, 'l') => {
-            const row = if (self.y >= self.text.items.len) null else self.text.items[self.y];
-            if (row != null and self.x < row.?.len)
+            const row = if (self.y >= self.buffer().len()) null else self.buffer().get(self.y);
+            if (row != null and self.x < row.?.len())
                 self.x += 1
-            else if (row != null and self.x == row.?.len) {
+            else if (row != null and self.x == row.?.len()) {
                 self.y += 1;
                 self.x = 0;
             }
@@ -206,8 +213,8 @@ fn handleMovement(self: *Self, key: Key) void {
         else => {},
     }
 
-    const row = if (self.y >= self.text.items.len) null else self.text.items[self.y];
-    const len = if (row) |r| @intCast(u16, r.len) else 0;
+    const row = if (self.y >= self.buffer().len()) null else self.buffer().get(self.y);
+    const len = if (row) |r| @intCast(u16, r.len()) else 0;
     if (self.x > len)
         self.x = len;
 }
@@ -219,6 +226,9 @@ fn open(self: *Self, file_path: []const u8) !void {
 
     // create a temporary buffer of 40Kb where the reader will read into
     var buf: [4096 * 10]u8 = undefined;
+    var text_buffer = TextBuffer.init();
+    errdefer text_buffer.deinit(self.gpa);
+
     while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
         // Check if the line contains a '\r'. If true, cut it off
         const real_line = blk: {
@@ -230,8 +240,13 @@ fn open(self: *Self, file_path: []const u8) !void {
 
         // append the line to our text buffer
         const text = try self.gpa.dupe(u8, real_line);
-        try self.text.append(self.gpa, text);
+        var row = TextBuffer.TextRow.init(text);
+        try row.update(self.gpa);
+        try text_buffer.append(self.gpa, row);
     }
+
+    try self.buffers.append(self.gpa, text_buffer);
+    self.active = self.buffers.items.len - 1;
 }
 
 /// Handle automatic scrolling based on cursor position

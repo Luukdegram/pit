@@ -83,7 +83,7 @@ pub const Key = enum(u16) {
         };
     }
 
-    /// Returns the corresponding `Key` from a xterm sequence
+    /// Returns the corresponding `Key` from an escape sequence
     pub fn fromEsc(char: u8) Key {
         return switch (char) {
             'A' => .arrow_up,
