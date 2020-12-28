@@ -164,7 +164,7 @@ pub const cursor = struct {
     }
 
     /// Sets the cursor at position `row`,`col`.
-    pub fn set(row: u16, col: u16) os.WriteError!void {
-        try get().out_buffer.writer().print(escape ++ "{d};{d}H", .{ row + 1, col + 1 });
+    pub fn set(row: u32, col: u32) os.WriteError!void {
+        try get().out_buffer.writer().print(escape ++ "{d};{d}H", .{ row, col });
     }
 };

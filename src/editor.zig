@@ -13,8 +13,9 @@ height: u16,
 x: u16,
 y: u16,
 text: std.ArrayListUnmanaged(TextRow),
-rows: u32,
 gpa: *Allocator,
+row_offset: u32,
+col_offset: u32,
 
 /// Mutable slice of characters
 const TextRow = []u8;
@@ -31,9 +32,10 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
         .height = size.height,
         .x = 0,
         .y = 0,
-        .rows = 0,
         .text = std.ArrayListUnmanaged(TextRow){},
         .gpa = gpa,
+        .row_offset = 0,
+        .col_offset = 0,
     };
     defer self.deinit();
 
@@ -116,13 +118,16 @@ fn readInput() !Key {
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
-fn update(self: Self) os.WriteError!void {
+fn update(self: *Self) os.WriteError!void {
+    try self.scroll();
     try term.cursor.hide();
     try term.sequence("H");
 
     try self.drawBuffer();
 
-    try term.cursor.set(self.y, self.x);
+    const y: u32 = self.y - self.row_offset;
+    const x: u32 = self.x - self.col_offset;
+    try term.cursor.set(y + 1, x + 1);
 
     try term.cursor.show();
     try term.flush();
@@ -132,21 +137,29 @@ fn update(self: Self) os.WriteError!void {
 fn drawBuffer(self: Self) os.WriteError!void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
-        if (i >= self.text.items.len) {
-            if (i == self.height / 3)
+        const offset = i + self.row_offset;
+        if (offset >= self.text.items.len) {
+            if (self.text.items.len == 0 and
+                i == self.height / 3)
                 try self.startupMessage()
             else
                 try term.write("~");
-
-            try term.sequence("K");
-            if (i < self.height - 1)
-                try term.write("\r\n");
         } else {
-            const line = self.text.items[i];
+            const line = self.text.items[offset];
 
-            const len = if (line.len > self.width) self.width else line.len;
+            const len = blk: {
+                if (line.len - self.col_offset < 0) break :blk 0;
+                var line_len = line.len - self.col_offset;
+
+                if (line_len > self.width) line_len = self.width;
+                break :blk line_len;
+            };
             try term.write(line[0..len]);
         }
+
+        try term.sequence("K");
+        if (i < self.height - 1)
+            try term.write("\r\n");
     }
 }
 
@@ -167,12 +180,36 @@ fn startupMessage(self: Self) os.WriteError!void {
 /// Checks the input character found, and handles the corresponding movement
 fn handleMovement(self: *Self, key: Key) void {
     switch (key) {
-        .arrow_left, @intToEnum(Key, 'h') => self.x -= if (self.x != 0) @as(u16, 1) else 0,
-        .arrow_down, @intToEnum(Key, 'j') => self.y += if (self.y != self.height - 1) @as(u16, 1) else 0,
-        .arrow_up, @intToEnum(Key, 'k') => self.y -= if (self.y != 0) @as(u16, 1) else 0,
-        .arrow_right, @intToEnum(Key, 'l') => self.x += if (self.x != self.width - 1) @as(u16, 1) else 0,
+        .arrow_left, @intToEnum(Key, 'h') => {
+            if (self.x != 0)
+                self.x -= 1
+            else if (self.y > 0) {
+                self.y -= 1;
+                self.x = @intCast(u16, self.text.items[self.y].len);
+            }
+        },
+        .arrow_down, @intToEnum(Key, 'j') => {
+            if (self.y < self.text.items.len) self.y += 1;
+        },
+        .arrow_up, @intToEnum(Key, 'k') => {
+            if (self.y != 0) self.y -= 1;
+        },
+        .arrow_right, @intToEnum(Key, 'l') => {
+            const row = if (self.y >= self.text.items.len) null else self.text.items[self.y];
+            if (row != null and self.x < row.?.len)
+                self.x += 1
+            else if (row != null and self.x == row.?.len) {
+                self.y += 1;
+                self.x = 0;
+            }
+        },
         else => {},
     }
+
+    const row = if (self.y >= self.text.items.len) null else self.text.items[self.y];
+    const len = if (row) |r| @intCast(u16, r.len) else 0;
+    if (self.x > len)
+        self.x = len;
 }
 
 /// Loads a file into the buffer
@@ -183,7 +220,32 @@ fn open(self: *Self, file_path: []const u8) !void {
     // create a temporary buffer of 40Kb where the reader will read into
     var buf: [4096 * 10]u8 = undefined;
     while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        const text = try self.gpa.dupe(u8, line);
+        // Check if the line contains a '\r'. If true, cut it off
+        const real_line = blk: {
+            if (line.len == 0) break :blk line;
+
+            const idx = line.len - 1;
+            break :blk if (line[idx] == '\r') line[0..idx] else line;
+        };
+
+        // append the line to our text buffer
+        const text = try self.gpa.dupe(u8, real_line);
         try self.text.append(self.gpa, text);
+    }
+}
+
+/// Handle automatic scrolling based on cursor position
+fn scroll(self: *Self) os.WriteError!void {
+    if (self.y < self.row_offset) {
+        self.row_offset = self.y;
+    }
+    if (self.y >= self.row_offset + self.height) {
+        self.row_offset = self.y - self.height + 1;
+    }
+    if (self.x < self.col_offset) {
+        self.col_offset = self.x;
+    }
+    if (self.x >= self.col_offset + self.width) {
+        self.col_offset = self.x - self.width + 1;
     }
 }
