@@ -1,6 +1,6 @@
 /// Keys mapped from ANSI codes to Pit keys
-pub const Key = enum {
-    arrow_left,
+pub const Key = enum(u16) {
+    arrow_left = 257,
     arrow_right,
     arrow_up,
     arrow_down,
@@ -66,6 +66,7 @@ pub const Key = enum {
     keypad_8,
     keypad_9,
     keypad_0,
+    _,
 
     /// Returns the corresponding `Key` from a Vt sequence (~)
     pub fn fromVt(char: u8) Key {

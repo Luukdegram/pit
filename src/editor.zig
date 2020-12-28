@@ -1,6 +1,8 @@
 const std = @import("std");
 const term = @import("term.zig");
 const os = std.os;
+const fs = std.fs;
+const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
@@ -10,49 +12,67 @@ width: u16,
 height: u16,
 x: u16,
 y: u16,
+text: std.ArrayListUnmanaged(TextRow),
+rows: u32,
+gpa: *Allocator,
+
+/// Mutable slice of characters
+const TextRow = []u8;
 
 /// Starts the editor
-pub fn run() !void {
+pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     try term.init();
     defer term.deinit();
 
     const size = try term.size();
-    const pos = try term.cursorPos();
 
-    var self = Self{ .width = size.width, .height = size.height, .x = pos.row, .y = pos.col };
+    var self = Self{
+        .width = size.width,
+        .height = size.height,
+        .x = 0,
+        .y = 0,
+        .rows = 0,
+        .text = std.ArrayListUnmanaged(TextRow){},
+        .gpa = gpa,
+    };
+    defer self.deinit();
+
+    if (with_file) |path| try self.open(path);
 
     while (true) {
         try self.update();
-        const c = try term.read();
+        const key = try readInput();
 
-        switch (c) {
-            .ansi => |ansi| switch (ansi) {
-                term.toCtrlKey('q') => {
-                    try term.sequence("2J");
-                    try term.sequence("H");
-                    try term.flush();
-                    break;
-                },
-                'h', 'j', 'k', 'l' => self.handleMovement(c),
-                else => {
-                    if (term.isCntrl(c))
-                        std.debug.print("{d}\r\n", .{c})
-                    else
-                        std.debug.print("{d} ('{c}')\r\n", .{ c, c });
-                },
+        switch (@enumToInt(key)) {
+            term.toCtrlKey('q') => {
+                try term.sequence("2J");
+                try term.sequence("H");
+                try term.flush();
+                break;
             },
-            .key => |key| switch (key) {
-                .arrow_up, .arrow_down, .arrow_right, .arrow_left => self.handleMovement(key),
-                else => {},
+            'h', 'j', 'k', 'l' => self.handleMovement(key),
+            else => |c| {
+                if (term.isCntrl(c))
+                    std.debug.print("{d}\r\n", .{c})
+                else
+                    std.debug.print("{d} ('{c}')\r\n", .{ c, @truncate(u8, c) });
             },
         }
     }
 }
 
+/// Frees the memory of all buffers
+fn deinit(self: *Self) void {
+    for (self.text.items) |line| self.gpa.free(line);
+    self.text.deinit(self.gpa);
+    self.* = undefined;
+}
+
 /// Blocking function. Reads from stdin and returns the character
 /// the user has given as input
-pub fn readInput() !InputResult {
+fn readInput() !Key {
     return while (true) {
+        const esc = @intToEnum(Key, '\x1b');
         const c = term.read() catch |err| switch (err) {
             error.EndOfStream => continue,
             else => return err,
@@ -63,62 +83,70 @@ pub fn readInput() !InputResult {
             var buf: [3]u8 = undefined;
 
             buf[0] = term.read() catch |err| switch (err) {
-                error.EndOfStream => return InputResult.esc,
+                error.EndOfStream => return esc,
                 else => return err,
             };
 
             buf[1] = term.read() catch |err| switch (err) {
-                error.EndOfStream => return InputResult.esc,
+                error.EndOfStream => return esc,
                 else => return err,
             };
 
             if (buf[0] == '[') {
                 if (buf[1] >= '0' and buf[1] <= '9') {
                     buf[2] = term.read() catch |err| switch (err) {
-                        error.EndOfStream => return InputResult.esc,
+                        error.EndOfStream => return esc,
                         else => return err,
                     };
 
-                    if (buf[2] == '~') return InputResult{ .key = Key.fromVt(buf[1]) };
-                } else return InputResult{ .key = Key.fromEsc(buf[1]) };
+                    if (buf[2] == '~') return Key.fromVt(buf[1]);
+                } else return Key.fromEsc(buf[1]);
             } else if (buf[0] == 'O') {
                 return switch (buf[1]) {
-                    'H' => InputResult{ .key = Key.home },
-                    'F' => InputResult{ .key = Key.end },
-                    else => InputResult.esc,
+                    'H' => Key.home,
+                    'F' => Key.end,
+                    else => esc,
                 };
             }
         }
 
-        break InputResult{ .ansi = c };
+        break @intToEnum(Key, c);
     } else unreachable;
 }
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
 fn update(self: Self) os.WriteError!void {
-    try term.hideCursor();
+    try term.cursor.hide();
     try term.sequence("H");
 
     try self.drawBuffer();
 
-    try term.setCursor(self.y, self.x);
+    try term.cursor.set(self.y, self.x);
 
-    try term.showCursor();
+    try term.cursor.show();
     try term.flush();
 }
 
+/// Draws the contents of the buffer in the terminal
 fn drawBuffer(self: Self) os.WriteError!void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
-        if (i == self.height / 3)
-            try self.startupMessage()
-        else
-            try term.write("~");
+        if (i >= self.text.items.len) {
+            if (i == self.height / 3)
+                try self.startupMessage()
+            else
+                try term.write("~");
 
-        try term.sequence("K");
-        if (i < self.height - 1)
-            try term.write("\r\n");
+            try term.sequence("K");
+            if (i < self.height - 1)
+                try term.write("\r\n");
+        } else {
+            const line = self.text.items[i];
+
+            const len = if (line.len > self.width) self.width else line.len;
+            try term.write(line[0..len]);
+        }
     }
 }
 
@@ -137,12 +165,25 @@ fn startupMessage(self: Self) os.WriteError!void {
 }
 
 /// Checks the input character found, and handles the corresponding movement
-fn handleMovement(self: *Self, char: u8) void {
-    switch (char) {
-        'h' => self.x -= if (self.x != 0) @as(u16, 1) else 0,
-        'j' => self.y += if (self.y != self.height - 1) @as(u16, 1) else 0,
-        'k' => self.y -= if (self.y != 0) @as(u16, 1) else 0,
-        'l' => self.x += if (self.x != self.width - 1) @as(u16, 1) else 0,
+fn handleMovement(self: *Self, key: Key) void {
+    switch (key) {
+        .arrow_left, @intToEnum(Key, 'h') => self.x -= if (self.x != 0) @as(u16, 1) else 0,
+        .arrow_down, @intToEnum(Key, 'j') => self.y += if (self.y != self.height - 1) @as(u16, 1) else 0,
+        .arrow_up, @intToEnum(Key, 'k') => self.y -= if (self.y != 0) @as(u16, 1) else 0,
+        .arrow_right, @intToEnum(Key, 'l') => self.x += if (self.x != self.width - 1) @as(u16, 1) else 0,
         else => {},
+    }
+}
+
+/// Loads a file into the buffer
+fn open(self: *Self, file_path: []const u8) !void {
+    const file = try fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    // create a temporary buffer of 40Kb where the reader will read into
+    var buf: [4096 * 10]u8 = undefined;
+    while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
+        const text = try self.gpa.dupe(u8, line);
+        try self.text.append(self.gpa, text);
     }
 }

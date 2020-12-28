@@ -2,7 +2,10 @@ const std = @import("std");
 const os = std.os;
 const io = std.io;
 
+/// Alias to a buffered TermWriter
 const BufferedWriter = io.BufferedWriter(4096, TermWriter);
+
+/// Global Term struct to save our variables
 const Term = struct {
     in: os.fd_t,
     out: os.fd_t,
@@ -10,6 +13,7 @@ const Term = struct {
     out_buffer: BufferedWriter,
 };
 
+/// Writer wrapper for our buffered writer
 const TermWriter = struct {
     fd: os.fd_t,
 
@@ -31,7 +35,10 @@ const TermWriter = struct {
     }
 };
 
+/// Global instance of our `Term`
 var term_instance: ?Term = null;
+/// alias to string literal of an escape sequence
+pub const escape = "\x1b[";
 
 /// Returns the Term instance
 /// Asserts the instance is not null
@@ -55,11 +62,12 @@ pub fn init() os.TermiosSetError!void {
 
     try os.tcsetattr(fd, .FLUSH, new_termios);
 
+    const out_fd = io.getStdOut().handle;
     term_instance = Term{
         .in = fd,
         .termios = original_termios,
-        .out = std.io.getStdOut().handle,
-        .out_buffer = io.bufferedWriter(TermWriter{ .fd = std.io.getStdOut().handle }),
+        .out = out_fd,
+        .out_buffer = io.bufferedWriter(TermWriter{ .fd = out_fd }),
     };
 }
 
@@ -70,7 +78,9 @@ pub fn deinit() void {
 }
 
 /// Returns `true` if the given `char` is a control character
-pub fn isCntrl(char: u8) bool {
+pub fn isCntrl(char: anytype) bool {
+    const T = @TypeOf(char);
+    if (@typeInfo(T) != .Int) @compileError("Only integers are allowed");
     return char <= 0x1f or char == 0x7f;
 }
 
@@ -82,7 +92,7 @@ pub fn toCtrlKey(char: u8) u8 {
 
 /// Reads the input from stdin. Returns error.EndOfStream on timeout
 pub fn read() !u8 {
-    return std.io.getStdIn().reader().readByte();
+    return (std.fs.File{ .handle = get().in }).reader().readByte();
 }
 
 /// Write `input` to std out's buffer. Call `flush()` to flush it out
@@ -97,6 +107,8 @@ pub fn sequence(comptime input: []const u8) os.WriteError!void {
 
 /// Dimensions of the tty, going from left top corner to right bottom corner.
 pub const Dimensions = struct { width: u16, height: u16 };
+
+/// Returns the current Dimensions of the terminal window
 pub fn size() error{Unexpected}!Dimensions {
     var tmp = std.mem.zeroes(os.winsize);
     const err_no = os.system.ioctl(get().in, os.TIOCGWINSZ, @ptrToInt(&tmp));
@@ -139,19 +151,20 @@ pub fn flush() os.WriteError!void {
     try get().out_buffer.flush();
 }
 
-/// Hides the cursor
-pub fn hideCursor() os.WriteError!void {
-    try sequence("?25l");
-}
+/// Cursor namespace
+pub const cursor = struct {
+    /// Hides the cursor
+    pub fn hide() os.WriteError!void {
+        try sequence("?25l");
+    }
 
-/// Shows the cursor
-pub fn showCursor() os.WriteError!void {
-    try sequence("?25h");
-}
+    /// Shows the cursor
+    pub fn show() os.WriteError!void {
+        try sequence("?25h");
+    }
 
-/// Sets the cursor at position `row`,`col`.
-pub fn setCursor(row: u16, col: u16) os.WriteError!void {
-    try get().out_buffer.writer().print(escape ++ "{d};{d}H", .{ row + 1, col + 1 });
-}
-
-pub const escape = "\x1b[";
+    /// Sets the cursor at position `row`,`col`.
+    pub fn set(row: u16, col: u16) os.WriteError!void {
+        try get().out_buffer.writer().print(escape ++ "{d};{d}H", .{ row + 1, col + 1 });
+    }
+};
