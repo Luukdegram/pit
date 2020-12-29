@@ -88,4 +88,14 @@ pub const Key = enum(u16) {
             else => unreachable,
         };
     }
+
+    /// Returns a `Key` enum from the given char
+    pub fn fromChar(char: u8) Key {
+        return @intToEnum(Key, char);
+    }
+
+    /// Returns the integer value of `Key`
+    pub fn int(self: Key) u16 {
+        return @enumToInt(self);
+    }
 };

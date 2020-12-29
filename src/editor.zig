@@ -32,7 +32,12 @@ buffers: std.ArrayListUnmanaged(TextBuffer),
 /// The index of the currently active buffer
 active: u32 = 0,
 
+/// Atomic bool used to shutdown the editor safely
+var should_quit = std.atomic.Bool.init(false);
+
 /// Starts the editor
+/// leaving `with_file` null will open the welcome buffer
+/// rather than a file
 pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     try term.init();
     defer term.deinit();
@@ -49,25 +54,11 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     if (with_file) |path| try self.open(path);
 
-    while (true) {
+    while (!should_quit.load(.SeqCst)) {
         try self.update();
         const key = try readInput();
 
-        switch (@enumToInt(key)) {
-            term.toCtrlKey('q') => {
-                try term.sequence("2J");
-                try term.sequence("H");
-                try term.flush();
-                break;
-            },
-            'h', 'j', 'k', 'l' => self.handleMovement(key),
-            else => |c| {
-                if (term.isCntrl(c))
-                    std.debug.print("{d}\r\n", .{c})
-                else
-                    std.debug.print("{d} ('{c}')\r\n", .{ c, @truncate(u8, c) });
-            },
-        }
+        try self.onInput(key);
     }
 }
 
@@ -133,6 +124,31 @@ fn readInput() !Key {
     } else unreachable;
 }
 
+fn onInput(self: *Self, key: Key) os.WriteError!void {
+    switch (key) {
+        Key.fromChar('h'),
+        Key.fromChar('j'),
+        Key.fromChar('k'),
+        Key.fromChar('l'),
+        .arrow_down,
+        .arrow_left,
+        .arrow_right,
+        .arrow_up,
+        => self.moveCursor(key),
+        Key.fromChar(term.toCtrlKey('q')) => try onQuit(),
+        else => {},
+    }
+}
+
+/// onQuit empties the terminal window
+fn onQuit() os.WriteError!void {
+    try term.sequence("2J");
+    try term.sequence("H");
+    try term.flush();
+
+    should_quit.store(true, .SeqCst);
+}
+
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
 fn update(self: *Self) os.WriteError!void {
@@ -195,7 +211,7 @@ fn startupMessage(self: Self) os.WriteError!void {
 }
 
 /// Checks the input character found, and handles the corresponding movement
-fn handleMovement(self: *Self, key: Key) void {
+fn moveCursor(self: *Self, key: Key) void {
     var current_row = if (self.text_y >= self.buffer().len())
         null
     else

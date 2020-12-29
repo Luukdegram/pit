@@ -65,6 +65,7 @@ pub const TextRow = struct {
     }
 };
 
+/// Mutable list of `TextRow`
 text: std.ArrayListUnmanaged(TextRow),
 
 /// Creates a new instance of `TextBuffer`
