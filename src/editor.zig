@@ -9,18 +9,28 @@ const Self = @This();
 
 usingnamespace @import("keys.zig");
 
+/// Width of the terminal window
 width: u16,
+/// Height of the terminal window
 height: u16,
-x: u16 = 0,
-y: u16 = 0,
+/// The cursor's x position in the raw text
+text_x: u32 = 0,
+/// The cursor's y position in the raw text
+text_y: u32 = 0,
+/// The cursor's x position that is being rendered
+view_x: u32 = 0,
+/// The cursor's y position that is being rendered
+view_y: u32 = 0,
+/// Editor's general purpose allocator
 gpa: *Allocator,
+/// The scrolling row offset of the view inside the buffer
 row_offset: u32 = 0,
+/// The scrolling column offset of the view inside the buffer
 col_offset: u32 = 0,
+/// Currently active buffers
 buffers: std.ArrayListUnmanaged(TextBuffer),
-active: usize = 0,
-
-/// Mutable slice of characters
-const TextRow = []u8;
+/// The index of the currently active buffer
+active: u32 = 0,
 
 /// Starts the editor
 pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
@@ -108,8 +118,8 @@ fn readInput() !Key {
                         else => return err,
                     };
 
-                    if (buf[2] == '~') return Key.fromVt(buf[1]);
-                } else return Key.fromEsc(buf[1]);
+                    if (buf[2] == '~') return Key.fromEscChar(buf[1]);
+                } else return Key.fromEscChar(buf[1]);
             } else if (buf[0] == 'O') {
                 return switch (buf[1]) {
                     'H' => Key.home,
@@ -132,8 +142,8 @@ fn update(self: *Self) os.WriteError!void {
 
     try self.drawBuffer();
 
-    const y: u32 = self.y - self.row_offset;
-    const x: u32 = self.x - self.col_offset;
+    const y = self.text_y - self.row_offset;
+    const x = self.view_x - self.col_offset;
     try term.cursor.set(y + 1, x + 1);
 
     try term.cursor.show();
@@ -155,13 +165,13 @@ fn drawBuffer(self: *Self) os.WriteError!void {
             const line = self.buffer().get(offset);
 
             const len = blk: {
-                if (line.len() - self.col_offset < 0) break :blk 0;
-                var line_len = line.len() - self.col_offset;
+                if (line.renderLen() - self.col_offset < 0) break :blk 0;
+                var line_len = line.renderLen() - self.col_offset;
 
                 if (line_len > self.width) line_len = self.width;
                 break :blk line_len;
             };
-            try term.write(line.renderable[0..len]);
+            try term.write(line.renderable[self.col_offset .. self.col_offset + len]);
         }
 
         try term.sequence("K");
@@ -172,7 +182,7 @@ fn drawBuffer(self: *Self) os.WriteError!void {
 
 /// Shows the startup message if no file buffer was opened
 fn startupMessage(self: Self) os.WriteError!void {
-    const message = "Pit editor -- version 0.0.1";
+    const message = "Pit editor -- version 0.0.0";
     var padding = (self.width - message.len) / 2;
     if (padding > 0) {
         try term.write("~");
@@ -186,37 +196,43 @@ fn startupMessage(self: Self) os.WriteError!void {
 
 /// Checks the input character found, and handles the corresponding movement
 fn handleMovement(self: *Self, key: Key) void {
+    var current_row = if (self.text_y >= self.buffer().len())
+        null
+    else
+        self.buffer().get(self.text_y);
+
     switch (key) {
         .arrow_left, @intToEnum(Key, 'h') => {
-            if (self.x != 0)
-                self.x -= 1
-            else if (self.y > 0) {
-                self.y -= 1;
-                self.x = @intCast(u16, self.buffer().get(self.y).len());
+            if (self.text_x != 0)
+                self.text_x -= 1
+            else if (self.text_y > 0) {
+                self.text_y -= 1;
+                self.text_x = self.buffer().get(self.text_y).len();
             }
         },
         .arrow_down, @intToEnum(Key, 'j') => {
-            if (self.y < self.buffer().len()) self.y += 1;
+            self.text_y += @boolToInt(self.text_y < self.buffer().len());
         },
         .arrow_up, @intToEnum(Key, 'k') => {
-            if (self.y != 0) self.y -= 1;
+            self.text_y -= @boolToInt(self.text_y != 0);
         },
         .arrow_right, @intToEnum(Key, 'l') => {
-            const row = if (self.y >= self.buffer().len()) null else self.buffer().get(self.y);
-            if (row != null and self.x < row.?.len())
-                self.x += 1
-            else if (row != null and self.x == row.?.len()) {
-                self.y += 1;
-                self.x = 0;
+            if (current_row) |row| {
+                if (self.text_x < row.len())
+                    self.text_x += 1
+                else if (self.text_x == row.len()) {
+                    self.text_y += 1;
+                    self.text_x = 0;
+                }
             }
         },
         else => {},
     }
 
-    const row = if (self.y >= self.buffer().len()) null else self.buffer().get(self.y);
-    const len = if (row) |r| @intCast(u16, r.len()) else 0;
-    if (self.x > len)
-        self.x = len;
+    current_row = if (self.text_y >= self.buffer().len()) null else self.buffer().get(self.text_y);
+    const len = if (current_row) |r| r.len() else 0;
+    if (self.text_x > len)
+        self.text_x = len;
 }
 
 /// Loads a file into the buffer
@@ -246,21 +262,26 @@ fn open(self: *Self, file_path: []const u8) !void {
     }
 
     try self.buffers.append(self.gpa, text_buffer);
-    self.active = self.buffers.items.len - 1;
+    self.active = @intCast(u32, self.buffers.items.len) - 1;
 }
 
 /// Handle automatic scrolling based on cursor position
 fn scroll(self: *Self) os.WriteError!void {
-    if (self.y < self.row_offset) {
-        self.row_offset = self.y;
+    self.view_x = if (self.text_y < self.buffer().len())
+        self.buffer().get(self.text_y).getIdx(self.text_x)
+    else
+        0;
+
+    if (self.text_y < self.row_offset) {
+        self.row_offset = self.text_y;
     }
-    if (self.y >= self.row_offset + self.height) {
-        self.row_offset = self.y - self.height + 1;
+    if (self.text_y >= self.row_offset + self.height) {
+        self.row_offset = self.text_y - self.height + 1;
     }
-    if (self.x < self.col_offset) {
-        self.col_offset = self.x;
+    if (self.view_x < self.col_offset) {
+        self.col_offset = self.view_x;
     }
-    if (self.x >= self.col_offset + self.width) {
-        self.col_offset = self.x - self.width + 1;
+    if (self.view_x >= self.col_offset + self.width) {
+        self.col_offset = self.view_x - self.width + 1;
     }
 }

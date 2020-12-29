@@ -68,8 +68,8 @@ pub const Key = enum(u16) {
     keypad_0,
     _,
 
-    /// Returns the corresponding `Key` from a Vt sequence (~)
-    pub fn fromVt(char: u8) Key {
+    /// Returns the corresponding `Key` from a character found after an escape sequence
+    pub fn fromEscChar(char: u8) Key {
         return switch (char) {
             '1' => .home,
             '2' => .insert,
@@ -79,13 +79,6 @@ pub const Key = enum(u16) {
             '6' => .page_down,
             '7' => .home,
             '8' => .end,
-            else => unreachable,
-        };
-    }
-
-    /// Returns the corresponding `Key` from an escape sequence
-    pub fn fromEsc(char: u8) Key {
-        return switch (char) {
             'A' => .arrow_up,
             'B' => .arrow_down,
             'C' => .arrow_right,

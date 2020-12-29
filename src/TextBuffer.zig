@@ -19,16 +19,17 @@ pub const TextRow = struct {
     pub fn update(self: *TextRow, gpa: *Allocator) error{OutOfMemory}!void {
         var tabs: u32 = 0;
 
-        for (self.raw) |raw| tabs += if (raw == '\t') @as(u32, 1) else 0;
+        for (self.raw) |raw| {
+            if (raw == '\t')
+                tabs += 1;
+        }
         gpa.free(self.renderable);
 
         // each tab is 4 spaces
         self.renderable = try gpa.alloc(u8, self.raw.len + tabs * 3 + 1);
 
         var i: usize = 0;
-        while (i < self.raw.len) {
-            const c = self.raw[i];
-
+        for (self.raw) |c| {
             if (c == '\t') {
                 self.renderable[i] = ' ';
                 i += 1;
@@ -40,9 +41,27 @@ pub const TextRow = struct {
         }
     }
 
+    /// Returns the length of the raw text
+    pub fn len(self: TextRow) u32 {
+        return @intCast(u32, self.raw.len);
+    }
+
     /// Returns the length of the renderable text
-    pub fn len(self: TextRow) usize {
-        return self.renderable.len;
+    pub fn renderLen(self: TextRow) u32 {
+        return @intCast(u32, self.renderable.len);
+    }
+
+    /// Given the index of a character inside the `raw` text,
+    /// returns the corresponding index from the `renderable` text.
+    pub fn getIdx(self: TextRow, idx: u32) u32 {
+        var offset: u32 = 0;
+        var i: usize = 0;
+        while (i < idx) : (i += 1) {
+            if (self.raw[i] == '\t')
+                offset += 3 - (offset % 4);
+            offset += 1;
+        }
+        return offset;
     }
 };
 
@@ -77,6 +96,6 @@ pub fn get(self: *TextBuffer, idx: usize) *TextRow {
 }
 
 /// Returns the amount of rows the buffer contains
-pub fn len(self: TextBuffer) usize {
-    return self.text.items.len;
+pub fn len(self: TextBuffer) u32 {
+    return @intCast(u32, self.text.items.len);
 }
