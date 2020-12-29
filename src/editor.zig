@@ -134,6 +134,10 @@ fn onInput(self: *Self, key: Key) os.WriteError!void {
         .arrow_left,
         .arrow_right,
         .arrow_up,
+        .home,
+        .end,
+        .page_up,
+        .page_down,
         => self.moveCursor(key),
         Key.fromChar(term.toCtrlKey('q')) => try onQuit(),
         else => {},
@@ -218,7 +222,9 @@ fn moveCursor(self: *Self, key: Key) void {
         self.buffer().get(self.text_y);
 
     switch (key) {
-        .arrow_left, @intToEnum(Key, 'h') => {
+        .home => self.text_x = 0,
+        .end => self.text_x = if (current_row) |r| r.len() else 0,
+        .arrow_left, Key.fromChar('h') => {
             if (self.text_x != 0)
                 self.text_x -= 1
             else if (self.text_y > 0) {
@@ -226,13 +232,13 @@ fn moveCursor(self: *Self, key: Key) void {
                 self.text_x = self.buffer().get(self.text_y).len();
             }
         },
-        .arrow_down, @intToEnum(Key, 'j') => {
+        .arrow_down, Key.fromChar('j') => {
             self.text_y += @boolToInt(self.text_y < self.buffer().len());
         },
-        .arrow_up, @intToEnum(Key, 'k') => {
+        .arrow_up, Key.fromChar('k') => {
             self.text_y -= @boolToInt(self.text_y != 0);
         },
-        .arrow_right, @intToEnum(Key, 'l') => {
+        .arrow_right, Key.fromChar('l') => {
             if (current_row) |row| {
                 if (self.text_x < row.len())
                     self.text_x += 1
@@ -241,6 +247,17 @@ fn moveCursor(self: *Self, key: Key) void {
                     self.text_x = 0;
                 }
             }
+        },
+        .page_up, .page_down => {
+            if (key == .page_up)
+                self.text_y = self.row_offset
+            else {
+                self.text_y = self.row_offset + self.height - 1;
+                if (self.text_y > self.buffer().len()) self.text_y = self.buffer().len();
+            }
+
+            var i = self.height;
+            while (i > 0) : (i -= 1) self.moveCursor(if (key == .page_up) .arrow_up else .arrow_down);
         },
         else => {},
     }
