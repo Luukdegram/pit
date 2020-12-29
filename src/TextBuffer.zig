@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = std.fs;
 const Allocator = std.mem.Allocator;
 
 const TextBuffer = @This();
@@ -101,13 +102,14 @@ pub const TextRow = struct {
 
 /// Mutable list of `TextRow`
 text: std.ArrayListUnmanaged(TextRow),
-file_name: []const u8,
+/// File name that the buffer corresponds to
+file_path: ?[]const u8,
 
 /// Creates a new instance of `TextBuffer`
 pub fn init(file_name: []const u8) TextBuffer {
     return .{
         .text = std.ArrayListUnmanaged(TextRow){},
-        .file_name = file_name,
+        .file_path = file_name,
     };
 }
 
@@ -137,4 +139,21 @@ pub fn get(self: *TextBuffer, idx: usize) *TextRow {
 /// Returns the amount of rows the buffer contains
 pub fn len(self: TextBuffer) u32 {
     return @intCast(u32, self.text.items.len);
+}
+
+/// Errorset for saving a file
+const SaveError = error{UnknownPath} || fs.File.OpenError || fs.File.WriteError;
+
+/// Saves the contents of the buffer to the file located at `file_path`
+pub fn save(self: TextBuffer) SaveError!void {
+    const path = self.file_path orelse return error.UnknownPath;
+
+    const file = try fs.cwd().createFile(path, .{});
+    defer file.close();
+
+    const writer = file.writer();
+    for (self.text.items) |row| {
+        try writer.writeAll(row.raw.items);
+        try writer.writeAll("\n");
+    }
 }

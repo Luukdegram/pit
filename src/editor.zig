@@ -161,6 +161,8 @@ fn onSelect(self: *Self, key: Key) Error!void {
 /// Handles the input when the editor's state is 'insert'
 fn onInsert(self: *Self, key: Key) Error!void {
     switch (key) {
+        Key.fromChar('\r') => {}, //TODO enter
+        Key.fromChar(127) => {}, //TODO backspace
         Key.fromChar(27) => self.state = .select,
         else => if (key.int() <= 256) {
             const buf = self.buffer();
