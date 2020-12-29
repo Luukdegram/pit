@@ -7,6 +7,9 @@ const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
+/// Error represents any error that can occur
+pub const Error = error{OutOfMemory} || os.WriteError;
+
 usingnamespace @import("keys.zig");
 
 /// Width of the terminal window
@@ -31,6 +34,11 @@ col_offset: u32 = 0,
 buffers: std.ArrayListUnmanaged(TextBuffer),
 /// The index of the currently active buffer
 active: u32 = 0,
+/// The state of the editor, this can either be 'select'
+/// , where the user can jump through the file and perform select options,
+/// or 'insert' in which the user can actually insert new characters
+/// The default is 'select'
+state: enum { select, insert } = .select,
 
 /// Atomic bool used to shutdown the editor safely
 var should_quit = std.atomic.Bool.init(false);
@@ -46,7 +54,8 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     var self = Self{
         .width = size.width,
-        .height = size.height,
+        // height -1 for status line
+        .height = size.height - 1,
         .gpa = gpa,
         .buffers = std.ArrayListUnmanaged(TextBuffer){},
     };
@@ -58,7 +67,10 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
         try self.update();
         const key = try readInput();
 
-        try self.onInput(key);
+        if (self.state == .select)
+            try self.onSelect(key)
+        else
+            try self.onInsert(key);
     }
 }
 
@@ -124,7 +136,8 @@ fn readInput() !Key {
     } else unreachable;
 }
 
-fn onInput(self: *Self, key: Key) os.WriteError!void {
+/// Handles input when the editor's state is 'select'
+fn onSelect(self: *Self, key: Key) Error!void {
     switch (key) {
         Key.fromChar('h'),
         Key.fromChar('j'),
@@ -140,12 +153,33 @@ fn onInput(self: *Self, key: Key) os.WriteError!void {
         .page_down,
         => self.moveCursor(key),
         Key.fromChar(term.toCtrlKey('q')) => try onQuit(),
+        Key.fromChar('i') => self.state = .insert,
         else => {},
     }
 }
 
+/// Handles the input when the editor's state is 'insert'
+fn onInsert(self: *Self, key: Key) Error!void {
+    switch (key) {
+        Key.fromChar(27) => self.state = .select,
+        else => if (key.int() <= 256) {
+            const buf = self.buffer();
+
+            if (self.text_y == buf.len()) {
+                try buf.append(self.gpa, "");
+            }
+
+            const row = buf.get(self.text_y);
+
+            try row.insert(self.gpa, self.text_x, key.char());
+
+            self.text_x += 1;
+        },
+    }
+}
+
 /// onQuit empties the terminal window
-fn onQuit() os.WriteError!void {
+fn onQuit() Error!void {
     try term.sequence("2J");
     try term.sequence("H");
     try term.flush();
@@ -155,12 +189,13 @@ fn onQuit() os.WriteError!void {
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
-fn update(self: *Self) os.WriteError!void {
+fn update(self: *Self) Error!void {
     try self.scroll();
     try term.cursor.hide();
     try term.sequence("H");
 
     try self.drawBuffer();
+    try self.drawStatusBar();
 
     const y = self.text_y - self.row_offset;
     const x = self.view_x - self.col_offset;
@@ -171,7 +206,7 @@ fn update(self: *Self) os.WriteError!void {
 }
 
 /// Draws the contents of the buffer in the terminal
-fn drawBuffer(self: *Self) os.WriteError!void {
+fn drawBuffer(self: *Self) Error!void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
         const offset = i + self.row_offset;
@@ -195,22 +230,44 @@ fn drawBuffer(self: *Self) os.WriteError!void {
         }
 
         try term.sequence("K");
-        if (i < self.height - 1)
-            try term.write("\r\n");
+        try term.write("\r\n");
     }
 }
 
+/// Draws a status bar with inverted colors
+fn drawStatusBar(self: *Self) Error!void {
+    // First invert the colors
+    try term.sequence("7m");
+
+    var buf: [4096 * 10]u8 = undefined;
+    const status_msg = try std.fmt.bufPrint(&buf, "{s} {d}:{d}", .{
+        self.buffer().file_name,
+        self.text_y + 1,
+        self.text_x + 1,
+    });
+
+    var i: usize = 0;
+    while (i < self.width - status_msg.len) : (i += 1)
+        try term.write(" ");
+
+    // write our status message at the end
+    try term.write(status_msg);
+
+    // Revert to regular colors
+    try term.sequence("m");
+}
+
 /// Shows the startup message if no file buffer was opened
-fn startupMessage(self: Self) os.WriteError!void {
+fn startupMessage(self: Self) Error!void {
     const message = "Pit editor -- version 0.0.0";
     var padding = (self.width - message.len) / 2;
     if (padding > 0) {
         try term.write("~");
         padding -= 1;
     }
-    while (padding > 0) : (padding -= 1) {
+    while (padding > 0) : (padding -= 1)
         try term.write(" ");
-    }
+
     try term.write(message);
 }
 
@@ -275,7 +332,7 @@ fn open(self: *Self, file_path: []const u8) !void {
 
     // create a temporary buffer of 40Kb where the reader will read into
     var buf: [4096 * 10]u8 = undefined;
-    var text_buffer = TextBuffer.init();
+    var text_buffer = TextBuffer.init(file_path);
     errdefer text_buffer.deinit(self.gpa);
 
     while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
@@ -288,10 +345,7 @@ fn open(self: *Self, file_path: []const u8) !void {
         };
 
         // append the line to our text buffer
-        const text = try self.gpa.dupe(u8, real_line);
-        var row = try TextBuffer.TextRow.init(text, self.gpa);
-        try row.update(self.gpa);
-        try text_buffer.append(self.gpa, row);
+        try text_buffer.append(self.gpa, real_line);
     }
 
     try self.buffers.append(self.gpa, text_buffer);
@@ -299,7 +353,7 @@ fn open(self: *Self, file_path: []const u8) !void {
 }
 
 /// Handle automatic scrolling based on cursor position
-fn scroll(self: *Self) os.WriteError!void {
+fn scroll(self: *Self) Error!void {
     self.view_x = if (self.text_y < self.buffer().len())
         self.buffer().get(self.text_y).getIdx(self.text_x)
     else

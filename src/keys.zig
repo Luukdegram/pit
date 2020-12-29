@@ -69,8 +69,8 @@ pub const Key = enum(u16) {
     _,
 
     /// Returns the corresponding `Key` from a character found after an escape sequence
-    pub fn fromEscChar(char: u8) Key {
-        return switch (char) {
+    pub fn fromEscChar(c: u8) Key {
+        return switch (c) {
             '1' => .home,
             '2' => .insert,
             '3' => .delete,
@@ -90,12 +90,19 @@ pub const Key = enum(u16) {
     }
 
     /// Returns a `Key` enum from the given char
-    pub fn fromChar(char: u8) Key {
-        return @intToEnum(Key, char);
+    pub fn fromChar(c: u8) Key {
+        return @intToEnum(Key, c);
     }
 
     /// Returns the integer value of `Key`
     pub fn int(self: Key) u16 {
         return @enumToInt(self);
+    }
+
+    /// Returns the character representing the `Key`
+    /// Asserts that `Key`'s value is coercable to u8
+    pub fn char(self: Key) u8 {
+        @import("std").debug.assert(self.int() <= 256);
+        return @intCast(u8, @enumToInt(self));
     }
 };
