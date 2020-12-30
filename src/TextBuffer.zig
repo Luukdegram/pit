@@ -7,8 +7,12 @@ const TextBuffer = @This();
 /// Helper struct to manage the buffer
 /// on a per-line basis
 pub const TextRow = struct {
+    /// Raw text buffer that is being edited
     raw: std.ArrayListUnmanaged(u8),
+    /// The text that will be rendered
     renderable: []u8,
+    /// Determines if the `TextRow` has been modified
+    is_dirty: bool = false,
 
     /// Creates a new TextRow instance
     /// User must manage `input`'s memory
@@ -77,6 +81,7 @@ pub const TextRow = struct {
 
     /// Inserts a character at index `idx` and updates the renderable text
     pub fn insert(self: *TextRow, gpa: *Allocator, idx: u32, c: u8) error{OutOfMemory}!void {
+        self.is_dirty = true;
         if (idx > self.len())
             try self.raw.append(gpa, c)
         else
@@ -86,27 +91,46 @@ pub const TextRow = struct {
     }
 
     /// Replaces the character at index `idx` with `c`
-    pub fn replace(self: *TextRow, idx: u32, c: u8) void {
+    pub fn replace(self: *TextRow, gpa: *Allocator, idx: u32, c: u8) error{OutOfMemory}!void {
         if (idx > self.len()) return;
+        self.is_dirty = true;
 
         self.raw.items[idx] = c;
+
+        try self.update(gpa);
     }
 
     /// Removes the character found at index `idx`
-    pub fn remove(self: *TextRow, idx: u32) void {
+    pub fn remove(self: *TextRow, gpa: *Allocator, idx: u32) error{OutOfMemory}!void {
         if (idx > self.len()) return;
+        self.is_dirty = true;
 
         _ = self.raw.orderedRemove(idx);
+
+        try self.update(gpa);
+    }
+
+    /// Appends a slice at index `idx`
+    pub fn appendSlice(self: *TextRow, gpa: *Allocator, idx: u32, slice: []const u8) error{OutOfMemory}!void {
+        try self.raw.insertSlice(gpa, idx, slice);
+
+        try self.update(gpa);
+    }
+
+    /// Resizes the raw text buffer to the given size
+    pub fn resize(self: *TextRow, gpa: *Allocator, n: u32) error{OutOfMemory}!void {
+        try self.raw.resize(gpa, n);
+        try self.update(gpa);
     }
 };
 
 /// Mutable list of `TextRow`
 text: std.ArrayListUnmanaged(TextRow),
 /// File name that the buffer corresponds to
-file_path: ?[]const u8,
+file_path: ?[]const u8 = null,
 
 /// Creates a new instance of `TextBuffer`
-pub fn init(file_name: []const u8) TextBuffer {
+pub fn init(file_name: ?[]const u8) TextBuffer {
     return .{
         .text = std.ArrayListUnmanaged(TextRow){},
         .file_path = file_name,
@@ -121,17 +145,16 @@ pub fn deinit(self: *TextBuffer, gpa: *Allocator) void {
 }
 
 /// Appends a new `TextRow` onto the buffer from the given `input` text
-pub fn append(self: *TextBuffer, gpa: *Allocator, input: []const u8) error{OutOfMemory}!void {
+pub fn insert(self: *TextBuffer, gpa: *Allocator, idx: u32, input: []const u8) error{OutOfMemory}!void {
     var row = try TextRow.init(gpa, input);
     if (input.len > 0) try row.update(gpa);
-
-    try self.text.append(gpa, row);
+    try self.text.insert(gpa, idx, row);
 }
 
 /// Returns the `TextRow` at index `idx`
-/// Asserts `idx` is not out of bounds
+/// Asserts `text` has elements
 pub fn get(self: *TextBuffer, idx: usize) *TextRow {
-    std.debug.assert(idx < self.text.items.len);
+    std.debug.assert(self.text.items.len > 0);
 
     return &self.text.items[idx];
 }
@@ -141,8 +164,24 @@ pub fn len(self: TextBuffer) u32 {
     return @intCast(u32, self.text.items.len);
 }
 
+/// Returns true when any of the buffer's rows are dirty
+pub fn isDirty(self: TextBuffer) bool {
+    return for (self.text.items) |row| {
+        if (row.is_dirty) break true;
+    } else false;
+}
+
+/// Removes the row at index `idx`
+pub fn delete(self: *TextBuffer, gpa: *Allocator, idx: u32) error{OutOfMemory}!void {
+    if (idx == self.len()) return;
+    var row = self.text.orderedRemove(idx);
+    const new_row = self.get(idx - 1);
+    try new_row.appendSlice(gpa, new_row.len(), row.raw.items);
+    row.deinit(gpa);
+}
+
 /// Errorset for saving a file
-const SaveError = error{UnknownPath} || fs.File.OpenError || fs.File.WriteError;
+pub const SaveError = error{UnknownPath} || fs.File.OpenError || fs.File.WriteError;
 
 /// Saves the contents of the buffer to the file located at `file_path`
 pub fn save(self: TextBuffer) SaveError!void {
@@ -152,8 +191,10 @@ pub fn save(self: TextBuffer) SaveError!void {
     defer file.close();
 
     const writer = file.writer();
-    for (self.text.items) |row| {
+    for (self.text.items) |*row| {
         try writer.writeAll(row.raw.items);
         try writer.writeAll("\n");
+
+        row.is_dirty = false;
     }
 }

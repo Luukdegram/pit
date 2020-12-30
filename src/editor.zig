@@ -34,8 +34,8 @@ col_offset: u32 = 0,
 buffers: std.ArrayListUnmanaged(TextBuffer),
 /// The index of the currently active buffer
 active: u32 = 0,
-/// The state of the editor, this can either be 'select'
-/// , where the user can jump through the file and perform select options,
+/// The state of the editor, this can either be 'select',
+/// where the user can jump through the file and perform select options,
 /// or 'insert' in which the user can actually insert new characters
 /// The default is 'select'
 state: enum { select, insert } = .select,
@@ -61,7 +61,10 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     };
     defer self.deinit();
 
-    if (with_file) |path| try self.open(path);
+    // Open the file path if given. If not, open a new clean TextBuffer
+    if (with_file) |path| try self.open(path) else {
+        try self.buffers.append(gpa, TextBuffer.init(null));
+    }
 
     while (!should_quit.load(.SeqCst)) {
         try self.update();
@@ -137,7 +140,7 @@ fn readInput() !Key {
 }
 
 /// Handles input when the editor's state is 'select'
-fn onSelect(self: *Self, key: Key) Error!void {
+fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError)!void {
     switch (key) {
         Key.fromChar('h'),
         Key.fromChar('j'),
@@ -153,6 +156,7 @@ fn onSelect(self: *Self, key: Key) Error!void {
         .page_down,
         => self.moveCursor(key),
         Key.fromChar(term.toCtrlKey('q')) => try onQuit(),
+        Key.fromChar(term.toCtrlKey('s')) => try self.onSave(),
         Key.fromChar('i') => self.state = .insert,
         else => {},
     }
@@ -161,14 +165,42 @@ fn onSelect(self: *Self, key: Key) Error!void {
 /// Handles the input when the editor's state is 'insert'
 fn onInsert(self: *Self, key: Key) Error!void {
     switch (key) {
-        Key.fromChar('\r') => {}, //TODO enter
-        Key.fromChar(127) => {}, //TODO backspace
+        // enter
+        Key.fromChar('\r') => {
+            const buf = self.buffer();
+            if (self.text_x == 0)
+                try buf.insert(self.gpa, self.text_y, "")
+            else {
+                const row = buf.get(self.text_y);
+                try buf.insert(self.gpa, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
+                try row.resize(self.gpa, self.text_x);
+            }
+
+            // set cursor to start of newline
+            self.text_y += 1;
+            self.text_x = 0;
+        },
+        // backspace
+        Key.fromChar(127) => {
+            const buf = self.buffer();
+
+            if (self.text_x > 0) {
+                try buf.get(self.text_y).remove(self.gpa, self.text_x - 1);
+                self.text_x -= 1;
+            } else if (self.text_y > 0) {
+                self.text_x = buf.get(self.text_y - 1).len();
+                try buf.delete(self.gpa, self.text_y);
+                self.text_y -= 1;
+            }
+        },
+        // <esc> key
         Key.fromChar(27) => self.state = .select,
+        // anything else
         else => if (key.int() <= 256) {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
-                try buf.append(self.gpa, "");
+                try buf.insert(self.gpa, self.text_y, "");
             }
 
             const row = buf.get(self.text_y);
@@ -187,6 +219,14 @@ fn onQuit() Error!void {
     try term.flush();
 
     should_quit.store(true, .SeqCst);
+}
+
+/// Saves the current Buffer to a file
+fn onSave(self: *Self) !void {
+    self.buffer().save() catch |err| switch (err) {
+        error.UnknownPath => @panic("TODO: Implement prompt to ask for file_path"),
+        else => return err,
+    };
 }
 
 /// Clears the screen and sets the cursor at the top
@@ -241,9 +281,15 @@ fn drawStatusBar(self: *Self) Error!void {
     // First invert the colors
     try term.sequence("7m");
 
+    const dirty_message = if (self.buffer().isDirty())
+        " +"
+    else
+        "";
+
     var buf: [4096 * 10]u8 = undefined;
-    const status_msg = try std.fmt.bufPrint(&buf, "{s} {d}:{d}", .{
-        self.buffer().file_name,
+    const status_msg = try std.fmt.bufPrint(&buf, "{s}{s} {d}:{d}", .{
+        self.buffer().file_path,
+        dirty_message,
         self.text_y + 1,
         self.text_x + 1,
     });
@@ -347,11 +393,12 @@ fn open(self: *Self, file_path: []const u8) !void {
         };
 
         // append the line to our text buffer
-        try text_buffer.append(self.gpa, real_line);
+        try text_buffer.insert(self.gpa, text_buffer.len(), real_line);
     }
 
     try self.buffers.append(self.gpa, text_buffer);
     self.active = @intCast(u32, self.buffers.items.len) - 1;
+    self.state = .select;
 }
 
 /// Handle automatic scrolling based on cursor position
