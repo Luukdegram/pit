@@ -1,6 +1,7 @@
 const std = @import("std");
 const term = @import("term.zig");
 const TextBuffer = @import("TextBuffer.zig");
+const Prompt = @import("Prompt.zig");
 const os = std.os;
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
@@ -95,7 +96,7 @@ fn buffer(self: *Self) *TextBuffer {
 
 /// Blocking function. Reads from stdin and returns the character
 /// the user has given as input
-fn readInput() !Key {
+pub fn readInput() !Key {
     return while (true) {
         const esc = @intToEnum(Key, '\x1b');
         const c = term.read() catch |err| switch (err) {
@@ -140,7 +141,7 @@ fn readInput() !Key {
 }
 
 /// Handles input when the editor's state is 'select'
-fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError)!void {
+fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError || os.ReadError || error{EndOfStream})!void {
     switch (key) {
         Key.fromChar('h'),
         Key.fromChar('j'),
@@ -158,6 +159,11 @@ fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError)!void {
         Key.fromChar(term.toCtrlKey('q')) => try onQuit(),
         Key.fromChar(term.toCtrlKey('s')) => try self.onSave(),
         Key.fromChar('i') => self.state = .insert,
+        Key.fromChar(':') => {
+            const cmd = try Prompt.run(self, self.gpa);
+            defer cmd.deinit(self.gpa);
+            try self.buffer().get(self.text_y).appendSlice(self.gpa, self.text_x, cmd.string);
+        },
         else => {},
     }
 }
@@ -196,7 +202,7 @@ fn onInsert(self: *Self, key: Key) Error!void {
         // <esc> key
         Key.fromChar(27) => self.state = .select,
         // anything else
-        else => if (key.int() <= 256) {
+        else => if (key.int() <= 256 and !term.isCntrl(key.char())) {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
@@ -231,7 +237,7 @@ fn onSave(self: *Self) !void {
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
-fn update(self: *Self) Error!void {
+pub fn update(self: *Self) Error!void {
     try self.scroll();
     try term.cursor.hide();
     try term.sequence("H");
