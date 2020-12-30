@@ -1,7 +1,7 @@
 const std = @import("std");
 const term = @import("term.zig");
 const TextBuffer = @import("TextBuffer.zig");
-const Prompt = @import("Prompt.zig");
+const StatusBar = @import("StatusBar.zig");
 const os = std.os;
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
@@ -40,6 +40,8 @@ active: u32 = 0,
 /// or 'insert' in which the user can actually insert new characters
 /// The default is 'select'
 state: enum { select, insert } = .select,
+/// Status bar that shows a status line, optional message and can trigger a prompt
+status_bar: *StatusBar,
 
 /// Atomic bool used to shutdown the editor safely
 var should_quit = std.atomic.Bool.init(false);
@@ -55,12 +57,14 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     var self = Self{
         .width = size.width,
-        // height -1 for status line
-        .height = size.height - 1,
+        .height = size.height,
         .gpa = gpa,
         .buffers = std.ArrayListUnmanaged(TextBuffer){},
+        .status_bar = undefined,
     };
     defer self.deinit();
+
+    self.status_bar = &StatusBar.init(&self);
 
     // Open the file path if given. If not, open a new clean TextBuffer
     if (with_file) |path| try self.open(path) else {
@@ -69,7 +73,7 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     while (!should_quit.load(.SeqCst)) {
         try self.update();
-        const key = try readInput();
+        const key = try self.readInput();
 
         if (self.state == .select)
             try self.onSelect(key)
@@ -88,7 +92,7 @@ fn deinit(self: *Self) void {
 /// Returns the currently active TextBuffer
 /// Asserts atleast 1 buffer exists and the
 /// `active` index is not out of bounds
-fn buffer(self: *Self) *TextBuffer {
+pub fn buffer(self: *Self) *TextBuffer {
     std.debug.assert(self.buffers.items.len > 0);
     std.debug.assert(self.active < self.buffers.items.len);
     return &self.buffers.items[self.active];
@@ -96,7 +100,7 @@ fn buffer(self: *Self) *TextBuffer {
 
 /// Blocking function. Reads from stdin and returns the character
 /// the user has given as input
-pub fn readInput() !Key {
+pub fn readInput(self: Self) !Key {
     return while (true) {
         const esc = @intToEnum(Key, '\x1b');
         const c = term.read() catch |err| switch (err) {
@@ -160,7 +164,7 @@ fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError || os.ReadErro
         Key.fromChar(term.toCtrlKey('s')) => try self.onSave(),
         Key.fromChar('i') => self.state = .insert,
         Key.fromChar(':') => {
-            const cmd = try Prompt.run(self, self.gpa);
+            const cmd = try self.status_bar.prompt(self.gpa);
             defer cmd.deinit(self.gpa);
             try self.buffer().get(self.text_y).appendSlice(self.gpa, self.text_x, cmd.string);
         },
@@ -242,8 +246,8 @@ pub fn update(self: *Self) Error!void {
     try term.cursor.hide();
     try term.sequence("H");
 
-    try self.drawBuffer();
-    try self.drawStatusBar();
+    try self.render();
+    try self.status_bar.render();
 
     const y = self.text_y - self.row_offset;
     const x = self.view_x - self.col_offset;
@@ -254,7 +258,7 @@ pub fn update(self: *Self) Error!void {
 }
 
 /// Draws the contents of the buffer in the terminal
-fn drawBuffer(self: *Self) Error!void {
+fn render(self: *Self) Error!void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
         const offset = i + self.row_offset;
@@ -280,35 +284,6 @@ fn drawBuffer(self: *Self) Error!void {
         try term.sequence("K");
         try term.write("\r\n");
     }
-}
-
-/// Draws a status bar with inverted colors
-fn drawStatusBar(self: *Self) Error!void {
-    // First invert the colors
-    try term.sequence("7m");
-
-    const dirty_message = if (self.buffer().isDirty())
-        " +"
-    else
-        "";
-
-    var buf: [4096 * 10]u8 = undefined;
-    const status_msg = try std.fmt.bufPrint(&buf, "{s}{s} {d}:{d}", .{
-        self.buffer().file_path,
-        dirty_message,
-        self.text_y + 1,
-        self.text_x + 1,
-    });
-
-    var i: usize = 0;
-    while (i < self.width - status_msg.len) : (i += 1)
-        try term.write(" ");
-
-    // write our status message at the end
-    try term.write(status_msg);
-
-    // Revert to regular colors
-    try term.sequence("m");
 }
 
 /// Shows the startup message if no file buffer was opened

@@ -1,5 +1,5 @@
 const std = @import("std");
-const editor = @import("editor.zig");
+const Editor = @import("Editor.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,5 +20,5 @@ pub fn main() !void {
     defer if (path) |p| alloc.free(p);
 
     // finally, run the editor
-    try editor.run(alloc, path);
+    try Editor.run(alloc, path);
 }
