@@ -35,6 +35,24 @@ const TermWriter = struct {
     }
 };
 
+/// 16-bit colors
+pub const Color = enum(u6) {
+    default = 39,
+    black = 30,
+    red = 31,
+    green = 32,
+    yellow = 33,
+    blue = 34,
+    magenta = 35,
+    cyan = 36,
+    white = 37,
+
+    /// Returns the integer value
+    pub fn val(self: Color) u6 {
+        return @enumToInt(self);
+    }
+};
+
 /// Global instance of our `Term`
 var term_instance: ?Term = null;
 /// alias to string literal of an escape sequence
@@ -100,9 +118,31 @@ pub fn write(input: []const u8) os.WriteError!void {
     try get().out_buffer.writer().writeAll(input);
 }
 
+/// Writes a singular byte to std out's buffer
+pub fn writeByte(c: u8) os.WriteError!void {
+    try get().out_buffer.writer().writeByte(c);
+}
+
+/// Prints a formatted slice to the terminal's output
+pub fn print(comptime fmt: []const u8, args: anytype) os.WriteError!void {
+    try get().out_buffer.writer().print(fmt, args);
+}
+
 /// Writes an escape sequence to stdout
 pub fn sequence(comptime input: []const u8) os.WriteError!void {
     try write(escape ++ input);
+}
+
+/// Writes the input byte/slice to stdout in the given `Color`
+pub fn colored(color: Color, input: anytype) os.WriteError!void {
+    const T = @TypeOf(input);
+    std.debug.assert(T == u8 or T == []u8 or T == []const u8);
+
+    try print(escape ++ "{d}m", .{color.val()});
+    if (T == u8)
+        try writeByte(input)
+    else
+        try write(input);
 }
 
 /// Dimensions of the tty, going from left top corner to right bottom corner.
@@ -118,34 +158,6 @@ pub fn size() error{Unexpected}!Dimensions {
     };
 }
 
-/// Cursor position's row and column
-const Position = struct { row: u16, col: u16 };
-
-/// Returns the current position of the cursor
-pub fn cursorPos() !Position {
-    var buffer: [32]u8 = undefined;
-    var i: usize = 0;
-
-    try sequence("6n");
-    try flush();
-
-    while (i < buffer.len) : (i += 1) {
-        if ((try os.read(get().in, buffer[i .. i + 1])) != 1) break;
-        if (buffer[i] == 'R') break;
-    }
-
-    if (buffer[0] != '\x1b' or buffer[1] != '[') return error.NoCursorFound;
-    var it = std.mem.tokenize(buffer[2..i], ";");
-
-    const row = it.next() orelse return error.NoCursorFound;
-    const col = it.next() orelse return error.NoCursorFound;
-
-    return Position{
-        .row = try std.fmt.parseInt(u16, row, 0),
-        .col = try std.fmt.parseInt(u16, col, 0),
-    };
-}
-
 /// Flushes the buffer to stdout
 pub fn flush() os.WriteError!void {
     try get().out_buffer.flush();
@@ -153,6 +165,9 @@ pub fn flush() os.WriteError!void {
 
 /// Cursor namespace
 pub const cursor = struct {
+    /// Cursor position's row and column
+    const Position = struct { row: u16, col: u16 };
+
     /// Hides the cursor
     pub fn hide() os.WriteError!void {
         try sequence("?25l");
@@ -166,6 +181,31 @@ pub const cursor = struct {
     /// Sets the cursor at position `row`,`col`.
     pub fn set(row: u32, col: u32) os.WriteError!void {
         try get().out_buffer.writer().print(escape ++ "{d};{d}H", .{ row, col });
+    }
+
+    /// Returns the current position of the cursor
+    pub fn getPos() !Position {
+        var buffer: [32]u8 = undefined;
+        var i: usize = 0;
+
+        try sequence("6n");
+        try flush();
+
+        while (i < buffer.len) : (i += 1) {
+            if ((try os.read(get().in, buffer[i .. i + 1])) != 1) break;
+            if (buffer[i] == 'R') break;
+        }
+
+        if (buffer[0] != '\x1b' or buffer[1] != '[') return error.NoCursorFound;
+        var it = std.mem.tokenize(buffer[2..i], ";");
+
+        const row = it.next() orelse return error.NoCursorFound;
+        const col = it.next() orelse return error.NoCursorFound;
+
+        return Position{
+            .row = try std.fmt.parseInt(u16, row, 0),
+            .col = try std.fmt.parseInt(u16, col, 0),
+        };
     }
 
     /// Saves the current cursor positon

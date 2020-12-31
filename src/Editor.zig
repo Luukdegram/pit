@@ -6,7 +6,7 @@ const os = std.os;
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
 
-const Self = @This();
+const Editor = @This();
 
 /// Error represents any error that can occur
 pub const Error = error{OutOfMemory} || os.WriteError;
@@ -55,7 +55,7 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     const size = try term.size();
 
-    var self = Self{
+    var self = Editor{
         .width = size.width,
         .height = size.height,
         .gpa = gpa,
@@ -84,7 +84,7 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 }
 
 /// Frees the memory of all buffers
-fn deinit(self: *Self) void {
+fn deinit(self: *Editor) void {
     for (self.buffers.items) |*b| {
         if (b.file_path) |p| self.gpa.free(p);
         b.deinit(self.gpa);
@@ -96,7 +96,7 @@ fn deinit(self: *Self) void {
 /// Returns the currently active TextBuffer
 /// Asserts atleast 1 buffer exists and the
 /// `active` index is not out of bounds
-pub fn buffer(self: *Self) *TextBuffer {
+pub fn buffer(self: *Editor) *TextBuffer {
     std.debug.assert(self.buffers.items.len > 0);
     std.debug.assert(self.active < self.buffers.items.len);
     return &self.buffers.items[self.active];
@@ -104,7 +104,7 @@ pub fn buffer(self: *Self) *TextBuffer {
 
 /// Blocking function. Reads from stdin and returns the character
 /// the user has given as input
-pub fn readInput(self: Self) !Key {
+pub fn readInput(self: Editor) !Key {
     return while (true) {
         const esc = @intToEnum(Key, '\x1b');
         const c = term.read() catch |err| switch (err) {
@@ -149,7 +149,7 @@ pub fn readInput(self: Self) !Key {
 }
 
 /// Handles input when the editor's state is 'select'
-fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError || os.ReadError || error{EndOfStream})!void {
+fn onSelect(self: *Editor, key: Key) (Error || TextBuffer.SaveError || os.ReadError || error{EndOfStream})!void {
     switch (key) {
         Key.fromChar('h'),
         Key.fromChar('j'),
@@ -178,7 +178,7 @@ fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError || os.ReadErro
 }
 
 /// Handles the input when the editor's state is 'insert'
-fn onInsert(self: *Self, key: Key) Error!void {
+fn onInsert(self: *Editor, key: Key) Error!void {
     switch (key) {
         // enter
         Key.fromChar('\r') => {
@@ -211,7 +211,7 @@ fn onInsert(self: *Self, key: Key) Error!void {
         // <esc> key
         Key.fromChar(27) => self.state = .select,
         // anything else
-        else => if (key.int() <= 256 and !term.isCntrl(key.char())) {
+        else => if (key.int() < 256 and !term.isCntrl(key.char())) {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
@@ -237,7 +237,7 @@ fn quit() Error!void {
 }
 
 /// Saves the current Buffer to a file
-fn save(self: *Self) !void {
+fn save(self: *Editor) !void {
     return while (true) {
         self.buffer().save() catch |err| switch (err) {
             error.UnknownPath => {
@@ -258,13 +258,13 @@ fn save(self: *Self) !void {
 }
 
 /// Searches for matches in the current buffer
-fn find(self: *Self) !void {
+fn find(self: *Editor) !void {
     const old_x = self.text_x;
     const old_y = self.text_y;
     const old_offset = self.row_offset;
 
     const on_input = struct {
-        var _self: *Self = undefined;
+        var _self: *Editor = undefined;
 
         fn wrapper(input: []const u8) void {
             // search through text
@@ -293,7 +293,7 @@ fn find(self: *Self) !void {
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
-pub fn update(self: *Self) Error!void {
+pub fn update(self: *Editor) Error!void {
     try self.scroll();
     try term.cursor.hide();
     try term.sequence("H");
@@ -310,7 +310,7 @@ pub fn update(self: *Self) Error!void {
 }
 
 /// Draws the contents of the buffer in the terminal
-fn render(self: *Self) Error!void {
+fn render(self: *Editor) Error!void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
         const offset = i + self.row_offset;
@@ -330,7 +330,10 @@ fn render(self: *Self) Error!void {
                 if (line_len > self.width) line_len = self.width;
                 break :blk line_len;
             };
-            try term.write(line.renderable[self.col_offset .. self.col_offset + len]);
+
+            for (line.renderable[self.col_offset .. self.col_offset + len]) |c, index| {
+                try term.colored(line.color(index), c);
+            }
         }
 
         try term.sequence("K");
@@ -339,7 +342,7 @@ fn render(self: *Self) Error!void {
 }
 
 /// Shows the startup message if no file buffer was opened
-fn startupMessage(self: Self) Error!void {
+fn startupMessage(self: Editor) Error!void {
     const message = "Pit editor -- version 0.0.0";
     var padding = (self.width - message.len) / 2;
     if (padding > 0) {
@@ -353,7 +356,7 @@ fn startupMessage(self: Self) Error!void {
 }
 
 /// Checks the input character found, and handles the corresponding movement
-fn moveCursor(self: *Self, key: Key) void {
+fn moveCursor(self: *Editor, key: Key) void {
     var current_row = if (self.text_y >= self.buffer().len())
         null
     else
@@ -407,7 +410,7 @@ fn moveCursor(self: *Self, key: Key) void {
 }
 
 /// Loads a file into the buffer
-fn open(self: *Self, file_path: []const u8) !void {
+fn open(self: *Editor, file_path: []const u8) !void {
     const file = try fs.cwd().openFile(file_path, .{});
     defer file.close();
 
@@ -435,7 +438,7 @@ fn open(self: *Self, file_path: []const u8) !void {
 }
 
 /// Handle automatic scrolling based on cursor position
-fn scroll(self: *Self) Error!void {
+fn scroll(self: *Editor) Error!void {
     self.view_x = if (self.text_y < self.buffer().len())
         self.buffer().get(self.text_y).getIdx(self.text_x)
     else

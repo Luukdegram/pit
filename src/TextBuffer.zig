@@ -1,6 +1,7 @@
 const std = @import("std");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
+const Color = @import("term.zig").Color;
 
 const TextBuffer = @This();
 
@@ -13,6 +14,8 @@ pub const TextRow = struct {
     renderable: []u8,
     /// Determines if the `TextRow` has been modified
     is_dirty: bool = false,
+    /// Rendarable text's colors per index
+    highlights: []Color,
 
     /// Creates a new TextRow instance
     /// User must manage `input`'s memory
@@ -20,6 +23,7 @@ pub const TextRow = struct {
         return TextRow{
             .raw = std.ArrayList(u8).fromOwnedSlice(gpa, try gpa.dupe(u8, input)).toUnmanaged(),
             .renderable = try gpa.dupe(u8, input),
+            .highlights = &[_]Color{},
         };
     }
 
@@ -27,6 +31,7 @@ pub const TextRow = struct {
     pub fn deinit(self: *TextRow, gpa: *Allocator) void {
         self.raw.deinit(gpa);
         gpa.free(self.renderable);
+        gpa.free(self.highlights);
         self.* = undefined;
     }
 
@@ -54,6 +59,24 @@ pub const TextRow = struct {
                 i += 1;
             }
         }
+
+        try self.highlight(gpa);
+    }
+
+    /// Sets the highlighting pieces of the renderable text
+    fn highlight(self: *TextRow, gpa: *Allocator) error{OutOfMemory}!void {
+        self.highlights = try gpa.realloc(self.highlights, self.renderable.len);
+
+        for (self.renderable) |c, i| self.highlights[i] = if (std.ascii.isDigit(c))
+            .green
+        else
+            .default;
+    }
+
+    /// Returns the `Color` of the character at the given index `idx`
+    pub fn color(self: TextRow, idx: usize) Color {
+        std.debug.assert(self.highlights.len > 0);
+        return self.highlights[idx];
     }
 
     /// Returns the length of the raw text
