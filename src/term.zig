@@ -167,4 +167,14 @@ pub const cursor = struct {
     pub fn set(row: u32, col: u32) os.WriteError!void {
         try get().out_buffer.writer().print(escape ++ "{d};{d}H", .{ row, col });
     }
+
+    /// Saves the current cursor positon
+    pub fn save() os.WriteError!void {
+        try sequence("s");
+    }
+
+    /// Restores the cursor to the last saved position
+    pub fn restore() os.WriteError!void {
+        try sequence("u");
+    }
 };

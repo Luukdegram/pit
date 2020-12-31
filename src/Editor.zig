@@ -67,10 +67,11 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     self.status_bar = &StatusBar.init(&self);
 
     // Open the file path if given. If not, open a new clean TextBuffer
-    if (with_file) |path| try self.open(path) else {
+    if (with_file) |path| try self.open(try gpa.dupe(u8, path)) else {
         try self.buffers.append(gpa, TextBuffer.init(null));
     }
 
+    self.status_bar.showMessage("Hi!");
     while (!should_quit.load(.SeqCst)) {
         try self.update();
         const key = try self.readInput();
@@ -84,7 +85,10 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
 /// Frees the memory of all buffers
 fn deinit(self: *Self) void {
-    for (self.buffers.items) |*b| b.deinit(self.gpa);
+    for (self.buffers.items) |*b| {
+        if (b.file_path) |p| self.gpa.free(p);
+        b.deinit(self.gpa);
+    }
     self.buffers.deinit(self.gpa);
     self.* = undefined;
 }
@@ -160,11 +164,12 @@ fn onSelect(self: *Self, key: Key) (Error || TextBuffer.SaveError || os.ReadErro
         .page_up,
         .page_down,
         => self.moveCursor(key),
-        Key.fromChar(term.toCtrlKey('q')) => try onQuit(),
-        Key.fromChar(term.toCtrlKey('s')) => try self.onSave(),
+        Key.fromChar(term.toCtrlKey('q')) => try quit(),
+        Key.fromChar(term.toCtrlKey('s')) => try self.save(),
+        Key.fromChar('/') => try self.find(),
         Key.fromChar('i') => self.state = .insert,
         Key.fromChar(':') => {
-            const cmd = try self.status_bar.prompt(self.gpa);
+            const cmd = try self.status_bar.prompt(self.gpa, null);
             defer cmd.deinit(self.gpa);
             try self.buffer().get(self.text_y).appendSlice(self.gpa, self.text_x, cmd.string);
         },
@@ -223,7 +228,7 @@ fn onInsert(self: *Self, key: Key) Error!void {
 }
 
 /// onQuit empties the terminal window
-fn onQuit() Error!void {
+fn quit() Error!void {
     try term.sequence("2J");
     try term.sequence("H");
     try term.flush();
@@ -232,11 +237,58 @@ fn onQuit() Error!void {
 }
 
 /// Saves the current Buffer to a file
-fn onSave(self: *Self) !void {
-    self.buffer().save() catch |err| switch (err) {
-        error.UnknownPath => @panic("TODO: Implement prompt to ask for file_path"),
-        else => return err,
+fn save(self: *Self) !void {
+    return while (true) {
+        self.buffer().save() catch |err| switch (err) {
+            error.UnknownPath => {
+                self.status_bar.showMessage("Path to write the file to:");
+                defer self.status_bar.hideMessage();
+
+                const result = try self.status_bar.prompt(self.gpa, null);
+
+                if (result == .canceled) return;
+
+                self.buffer().file_path = result.string;
+                continue;
+            },
+            else => return err,
+        };
+        return;
+    } else unreachable;
+}
+
+/// Searches for matches in the current buffer
+fn find(self: *Self) !void {
+    const old_x = self.text_x;
+    const old_y = self.text_y;
+    const old_offset = self.row_offset;
+
+    const on_input = struct {
+        var _self: *Self = undefined;
+
+        fn wrapper(input: []const u8) void {
+            // search through text
+            for (_self.buffer().text.items) |row, i| {
+                if (std.mem.indexOf(u8, row.raw.items, input)) |index| {
+                    _self.text_y = @intCast(u32, i);
+                    _self.text_x = @intCast(u32, index);
+                    _self.row_offset = _self.buffer().len();
+                    break;
+                }
+            }
+        }
     };
+    on_input._self = self;
+
+    // Ask user for search query and free its resources
+    const search_string = try self.status_bar.prompt(self.gpa, on_input.wrapper);
+    defer search_string.deinit(self.gpa);
+
+    if (search_string == .canceled) {
+        self.text_x = old_x;
+        self.text_y = old_y;
+        self.row_offset = old_offset;
+    }
 }
 
 /// Clears the screen and sets the cursor at the top
