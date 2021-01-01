@@ -9,7 +9,10 @@ const Allocator = std.mem.Allocator;
 const Editor = @This();
 
 /// Error represents any error that can occur
-pub const Error = error{OutOfMemory} || os.WriteError;
+pub const Error = error{
+    OutOfMemory,
+    InvalidUtf8,
+} || os.WriteError;
 
 usingnamespace @import("keys.zig");
 
@@ -113,7 +116,7 @@ pub fn readInput(self: Editor) !Key {
 
         // handle escape sequences
         if (c == '\x1b') {
-            var buf: [3]u8 = undefined;
+            var buf: [3]u21 = undefined;
 
             buf[0] = term.read() catch |err| switch (err) {
                 error.EndOfStream => return esc,
@@ -148,7 +151,7 @@ pub fn readInput(self: Editor) !Key {
 }
 
 /// Handles input when the editor's state is 'select'
-fn onSelect(self: *Editor, key: Key) (Error || TextBuffer.SaveError || os.ReadError || error{EndOfStream})!void {
+fn onSelect(self: *Editor, key: Key) (Error || TextBuffer.SaveError || os.ReadError || error{EndOfStream} || Key.UtfError)!void {
     switch (key) {
         Key.fromChar('h'),
         Key.fromChar('j'),
@@ -170,7 +173,7 @@ fn onSelect(self: *Editor, key: Key) (Error || TextBuffer.SaveError || os.ReadEr
         Key.fromChar(':') => {
             const cmd = try self.status_bar.prompt(self.gpa, null);
             defer cmd.deinit(self.gpa);
-            try self.buffer().get(self.text_y).appendSlice(self.gpa, self.text_x, cmd.string);
+            // try self.buffer().get(self.text_y).insert(self.gpa, self.text_x, cmd.string);
         },
         else => {},
     }
@@ -186,7 +189,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
                 try buf.insert(self.gpa, self.text_y, "")
             else {
                 const row = buf.get(self.text_y);
-                try buf.insert(self.gpa, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
+                // try buf.insert(self.gpa, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
                 try row.resize(self.gpa, self.text_x);
             }
 
@@ -210,7 +213,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
         // <esc> key
         Key.fromChar(27) => self.state = .select,
         // anything else
-        else => if (key.int() < 256) {
+        else => {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
@@ -219,7 +222,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
 
             const row = buf.get(self.text_y);
 
-            try row.insert(self.gpa, self.text_x, key.char());
+            try row.insert(self.gpa, self.text_x, @intCast(u21, key.int()));
 
             self.text_x += 1;
         },
@@ -247,7 +250,8 @@ fn save(self: *Editor) !void {
 
                 if (result == .canceled) return;
 
-                self.buffer().file_path = result.string;
+                // self.buffer().file_path = result.string;
+                self.buffer().file_path = "test.txt";
                 continue;
             },
             else => return err,
@@ -267,7 +271,7 @@ fn find(self: *Editor) !void {
 
         var hl_row: ?*TextBuffer.TextRow = null;
 
-        fn wrapper(input: []const u8, key: Key) void {
+        fn wrapper(input: []const u21, key: Key) void {
             if (Key.fromChar(27) == key and hl_row != null) {
                 // reset its highlighting when <esc> is pressed
                 hl_row.?.update(editor.gpa) catch {};
@@ -276,7 +280,7 @@ fn find(self: *Editor) !void {
                 hl_row.?.update(editor.gpa) catch {};
             } else for (editor.buffer().text.items) |*row, i| {
                 // search through text
-                if (std.mem.indexOf(u8, row.renderable, input)) |index| {
+                if (std.mem.indexOf(u21, row.renderable, input)) |index| {
                     editor.text_y = @intCast(u32, i);
                     editor.text_x = row.fromRenderIdx(index);
 
@@ -306,7 +310,7 @@ fn find(self: *Editor) !void {
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
-pub fn update(self: *Editor) Error!void {
+pub fn update(self: *Editor) !void {
     try self.scroll();
     try term.cursor.hide();
     try term.sequence("H");
@@ -323,7 +327,7 @@ pub fn update(self: *Editor) Error!void {
 }
 
 /// Draws the contents of the buffer in the terminal
-fn render(self: *Editor) Error!void {
+fn render(self: *Editor) !void {
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
         const offset = i + self.row_offset;
@@ -344,8 +348,11 @@ fn render(self: *Editor) Error!void {
                 break :blk line_len;
             };
 
-            for (line.renderable[self.col_offset .. self.col_offset + len]) |c, index| {
-                try term.colored(line.color(index), c);
+            for (line.renderable[self.col_offset..len]) |c, index| {
+                var cp: [4]u8 = undefined;
+                const cp_len = try std.unicode.utf8Encode(c, &cp);
+
+                try term.colored(line.color(index), cp[0..cp_len]);
             }
         }
 
@@ -435,7 +442,7 @@ fn open(self: *Editor, file_path: []const u8) !void {
     while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
         // Check if the line contains a '\r'. If true, cut it off
         const real_line = blk: {
-            if (line.len == 0) break :blk line;
+            if (line.len == 0) continue;
 
             const idx = line.len - 1;
             break :blk if (line[idx] == '\r') line[0..idx] else line;

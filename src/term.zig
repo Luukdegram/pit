@@ -109,8 +109,25 @@ pub fn toCtrlKey(char: u8) u8 {
 }
 
 /// Reads the input from stdin. Returns error.EndOfStream on timeout
-pub fn read() !u8 {
-    return (std.fs.File{ .handle = get().in }).reader().readByte();
+/// Returns a utf8 codepoint
+pub fn read() !u21 {
+    var buffer: [4]u8 = undefined;
+
+    const len = try (std.fs.File{ .handle = get().in }).read(&buffer);
+    if (len == 0) return error.EndOfStream;
+
+    if (buffer[0] == '\x1b') return '\x1b';
+    std.debug.print("Len: {} {}\n", .{ len, buffer[0..len] });
+    std.debug.print("test\n", .{});
+
+    const unicode = std.unicode;
+    return switch (len) {
+        1 => @as(u21, buffer[0]),
+        2 => unicode.utf8Decode2(buffer[0..len]),
+        3 => unicode.utf8Decode3(buffer[0..len]),
+        4 => unicode.utf8Decode4(buffer[0..len]),
+        else => unreachable,
+    };
 }
 
 /// Write `input` to std out's buffer. Call `flush()` to flush it out

@@ -17,7 +17,7 @@ message: ?[]const u8,
 const PromptResult = union(enum) {
     /// User entered a string that does not contain a known command
     /// i.e. a file path when saving a file
-    string: []const u8,
+    string: []const u21,
     /// User entered a string that matches a command
     command: void, // TODO: Implement commands
     /// User pressed esc during prompt
@@ -43,8 +43,8 @@ pub fn init(editor: *Editor) StatusBar {
 /// Blocking function that allows the user to enter
 /// information in the prompt
 /// NOTE: `deinit` must be called on the result to free any resources that were allocated
-pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn ([]const u8, Key) void) !PromptResult {
-    var buf: [128]u8 = undefined;
+pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn ([]const u21, Key) void) !PromptResult {
+    var buf: [128]u21 = undefined;
     var i: usize = 0;
 
     return while (true) {
@@ -64,11 +64,11 @@ pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn ([]const u8, Key)
             => i -= @boolToInt(i > 0),
 
             // user pressed enter
-            Key.fromChar('\r') => break PromptResult{ .string = try gpa.dupe(u8, buf[0..i]) },
+            Key.fromChar('\r') => break PromptResult{ .string = try gpa.dupe(u21, buf[0..i]) },
 
             // regular text input
             else => if (key.int() < 128 and !term.isCntrl(key.int()) and i < buf.len) {
-                buf[i] = key.char();
+                buf[i] = @intCast(u21, key.int());
                 i += 1;
             },
         }

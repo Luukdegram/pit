@@ -9,9 +9,9 @@ const TextBuffer = @This();
 /// on a per-line basis
 pub const TextRow = struct {
     /// Raw text buffer that is being edited
-    raw: std.ArrayListUnmanaged(u8),
+    raw: std.ArrayListUnmanaged(u21),
     /// The text that will be rendered
-    renderable: []u8,
+    renderable: []u21,
     /// Determines if the `TextRow` has been modified
     is_dirty: bool = false,
     /// Rendarable text's colors per index
@@ -19,10 +19,14 @@ pub const TextRow = struct {
 
     /// Creates a new TextRow instance
     /// User must manage `input`'s memory
-    pub fn init(gpa: *Allocator, input: []const u8) error{OutOfMemory}!TextRow {
+    pub fn init(gpa: *Allocator, input: []const u8) !TextRow {
+        var list = std.ArrayList(u21).init(gpa);
+        var it = (try std.unicode.Utf8View.init(input)).iterator();
+        while (it.nextCodepoint()) |cp| try list.append(cp);
+
         return TextRow{
-            .raw = std.ArrayList(u8).fromOwnedSlice(gpa, try gpa.dupe(u8, input)).toUnmanaged(),
-            .renderable = try gpa.dupe(u8, input),
+            .raw = list.toUnmanaged(),
+            .renderable = try gpa.dupe(u21, list.items),
             .highlights = &[_]Color{},
         };
     }
@@ -43,10 +47,14 @@ pub const TextRow = struct {
             if (raw == '\t')
                 tabs += 1;
         }
-        gpa.free(self.renderable);
 
         // each tab is 4 spaces
-        self.renderable = try gpa.alloc(u8, self.len() + tabs * 3 + 1);
+        self.renderable = try gpa.realloc(self.renderable, self.len() + (tabs * 3) + 1);
+        // set to zeroes
+        std.mem.set(u21, self.renderable, 0);
+
+        // self.renderable = try gpa.realloc(self.renderable, self.len());
+        const space = std.unicode.utf8Decode(" ") catch unreachable;
 
         var i: usize = 0;
         for (self.raw.items) |c| {
@@ -67,7 +75,7 @@ pub const TextRow = struct {
     fn highlight(self: *TextRow, gpa: *Allocator) error{OutOfMemory}!void {
         self.highlights = try gpa.realloc(self.highlights, self.renderable.len);
 
-        for (self.renderable) |c, i| self.highlights[i] = if (std.ascii.isDigit(c))
+        for (self.renderable) |c, i| self.highlights[i] = if (c < 256 and std.ascii.isDigit(@intCast(u8, c)))
             .green
         else
             .default;
@@ -86,6 +94,12 @@ pub const TextRow = struct {
 
     /// Returns the length of the renderable text
     pub fn renderLen(self: TextRow) u32 {
+        var i: u32 = 0;
+        for (self.renderable) |cp| {
+            const cp_len = std.unicode.utf8CodepointSequenceLength(cp) catch unreachable;
+            i += cp_len;
+        }
+        // return i;
         return @intCast(u32, self.renderable.len);
     }
 
@@ -117,7 +131,7 @@ pub const TextRow = struct {
     }
 
     /// Inserts a character at index `idx` and updates the renderable text
-    pub fn insert(self: *TextRow, gpa: *Allocator, idx: u32, c: u8) error{OutOfMemory}!void {
+    pub fn insert(self: *TextRow, gpa: *Allocator, idx: u32, c: u21) error{OutOfMemory}!void {
         self.is_dirty = true;
         if (idx > self.len())
             try self.raw.append(gpa, c)
@@ -128,7 +142,7 @@ pub const TextRow = struct {
     }
 
     /// Replaces the character at index `idx` with `c`
-    pub fn replace(self: *TextRow, gpa: *Allocator, idx: u32, c: u8) error{OutOfMemory}!void {
+    pub fn replace(self: *TextRow, gpa: *Allocator, idx: u32, c: u21) error{OutOfMemory}!void {
         if (idx > self.len()) return;
         self.is_dirty = true;
 
@@ -148,7 +162,7 @@ pub const TextRow = struct {
     }
 
     /// Appends a slice at index `idx`
-    pub fn appendSlice(self: *TextRow, gpa: *Allocator, idx: u32, slice: []const u8) error{OutOfMemory}!void {
+    pub fn appendSlice(self: *TextRow, gpa: *Allocator, idx: u32, slice: []const u21) error{OutOfMemory}!void {
         try self.raw.insertSlice(gpa, idx, slice);
 
         try self.update(gpa);
@@ -182,7 +196,7 @@ pub fn deinit(self: *TextBuffer, gpa: *Allocator) void {
 }
 
 /// Appends a new `TextRow` onto the buffer from the given `input` text
-pub fn insert(self: *TextBuffer, gpa: *Allocator, idx: u32, input: []const u8) error{OutOfMemory}!void {
+pub fn insert(self: *TextBuffer, gpa: *Allocator, idx: u32, input: []const u8) !void {
     var row = try TextRow.init(gpa, input);
     if (input.len > 0) try row.update(gpa);
     try self.text.insert(gpa, idx, row);
@@ -218,7 +232,11 @@ pub fn delete(self: *TextBuffer, gpa: *Allocator, idx: u32) error{OutOfMemory}!v
 }
 
 /// Errorset for saving a file
-pub const SaveError = error{UnknownPath} || fs.File.OpenError || fs.File.WriteError;
+pub const SaveError = error{
+    UnknownPath,
+    Utf8CannotEncodeSurrogateHalf,
+    CodepointTooLarge,
+} || fs.File.OpenError || fs.File.WriteError;
 
 /// Saves the contents of the buffer to the file located at `file_path`
 pub fn save(self: TextBuffer) SaveError!void {
@@ -229,7 +247,12 @@ pub fn save(self: TextBuffer) SaveError!void {
 
     const writer = file.writer();
     for (self.text.items) |*row| {
-        try writer.writeAll(row.raw.items);
+        // try writer.writeAll(row.raw.items);
+        for (row.raw.items) |cp, i| {
+            var buf: [4]u8 = undefined;
+            const cp_len = try std.unicode.utf8Encode(cp, &buf);
+            try writer.writeAll(buf[0..cp_len]);
+        }
         try writer.writeAll("\n");
 
         row.is_dirty = false;
