@@ -196,8 +196,18 @@ pub fn deinit(self: *TextBuffer, gpa: *Allocator) void {
 }
 
 /// Appends a new `TextRow` onto the buffer from the given `input` text
-pub fn insert(self: *TextBuffer, gpa: *Allocator, idx: u32, input: []const u8) !void {
-    var row = try TextRow.init(gpa, input);
+pub fn insert(self: *TextBuffer, comptime T: type, gpa: *Allocator, idx: u32, input: []const T) !void {
+    var row = if (T == u8)
+        try TextRow.init(gpa, input)
+    else if (T == u21)
+        TextRow{
+            .raw = std.ArrayList(T).fromOwnedSlice(gpa, try gpa.dupe(T, input)).toUnmanaged(),
+            .renderable = &[_]T{},
+            .highlights = &[_]Color{},
+        }
+    else
+        @compileError("Unsupported type. T must be u8 or u21");
+
     if (input.len > 0) try row.update(gpa);
     try self.text.insert(gpa, idx, row);
 }

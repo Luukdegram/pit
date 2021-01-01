@@ -173,7 +173,7 @@ fn onSelect(self: *Editor, key: Key) (Error || TextBuffer.SaveError || os.ReadEr
         Key.fromChar(':') => {
             const cmd = try self.status_bar.prompt(self.gpa, null);
             defer cmd.deinit(self.gpa);
-            // try self.buffer().get(self.text_y).insert(self.gpa, self.text_x, cmd.string);
+            try self.buffer().get(self.text_y).appendSlice(self.gpa, self.text_x, cmd.string);
         },
         else => {},
     }
@@ -186,10 +186,10 @@ fn onInsert(self: *Editor, key: Key) Error!void {
         Key.fromChar('\r') => {
             const buf = self.buffer();
             if (self.text_x == 0)
-                try buf.insert(self.gpa, self.text_y, "")
+                try buf.insert(u8, self.gpa, self.text_y, "")
             else {
                 const row = buf.get(self.text_y);
-                // try buf.insert(self.gpa, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
+                try buf.insert(u21, self.gpa, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
                 try row.resize(self.gpa, self.text_x);
             }
 
@@ -217,7 +217,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
-                try buf.insert(self.gpa, self.text_y, "");
+                try buf.insert(u8, self.gpa, self.text_y, "");
             }
 
             const row = buf.get(self.text_y);
@@ -449,7 +449,7 @@ fn open(self: *Editor, file_path: []const u8) !void {
         };
 
         // append the line to our text buffer
-        try text_buffer.insert(self.gpa, text_buffer.len(), real_line);
+        try text_buffer.insert(u8, self.gpa, text_buffer.len(), real_line);
     }
 
     try self.buffers.append(self.gpa, text_buffer);
