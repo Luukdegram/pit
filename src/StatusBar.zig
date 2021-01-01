@@ -43,16 +43,17 @@ pub fn init(editor: *Editor) StatusBar {
 /// Blocking function that allows the user to enter
 /// information in the prompt
 /// NOTE: `deinit` must be called on the result to free any resources that were allocated
-pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn (input: []const u8) void) !PromptResult {
+pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn ([]const u8, Key) void) !PromptResult {
     var buf: [128]u8 = undefined;
     var i: usize = 0;
 
     return while (true) {
         try self.editor.update();
-
         const key = try self.editor.readInput();
 
+        defer if (on_input) |callback| callback(buf[0..i], key);
         switch (key) {
+
             // user pressed <esc> key
             Key.fromChar(27) => break PromptResult.canceled,
 
@@ -71,8 +72,6 @@ pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn (input: []const u
                 i += 1;
             },
         }
-
-        if (on_input) |callback| callback(buf[0..i]);
     } else unreachable;
 }
 

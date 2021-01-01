@@ -71,7 +71,6 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
         try self.buffers.append(gpa, TextBuffer.init(null));
     }
 
-    self.status_bar.showMessage("Hi!");
     while (!should_quit.load(.SeqCst)) {
         try self.update();
         const key = try self.readInput();
@@ -211,7 +210,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
         // <esc> key
         Key.fromChar(27) => self.state = .select,
         // anything else
-        else => if (key.int() < 256 and !term.isCntrl(key.char())) {
+        else => if (key.int() < 256) {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
@@ -264,21 +263,36 @@ fn find(self: *Editor) !void {
     const old_offset = self.row_offset;
 
     const on_input = struct {
-        var _self: *Editor = undefined;
+        var editor: *Editor = undefined;
 
-        fn wrapper(input: []const u8) void {
-            // search through text
-            for (_self.buffer().text.items) |row, i| {
-                if (std.mem.indexOf(u8, row.raw.items, input)) |index| {
-                    _self.text_y = @intCast(u32, i);
-                    _self.text_x = @intCast(u32, index);
-                    _self.row_offset = _self.buffer().len();
+        var hl_row: ?*TextBuffer.TextRow = null;
+
+        fn wrapper(input: []const u8, key: Key) void {
+            if (Key.fromChar(27) == key and hl_row != null) {
+                // reset its highlighting when <esc> is pressed
+                hl_row.?.update(editor.gpa) catch {};
+            } else if (input.len == 0 and hl_row != null) {
+                // user backspaced all input, so clear highlighting
+                hl_row.?.update(editor.gpa) catch {};
+            } else for (editor.buffer().text.items) |*row, i| {
+                // search through text
+                if (std.mem.indexOf(u8, row.renderable, input)) |index| {
+                    editor.text_y = @intCast(u32, i);
+                    editor.text_x = row.fromRenderIdx(index);
+
+                    // in case user used a backspace, this will reset the previous highlighting
+                    row.update(editor.gpa) catch {};
+
+                    for (row.renderable[index .. index + input.len]) |_, idx|
+                        row.highlights[index + idx] = .red;
+
+                    hl_row = row;
                     break;
                 }
             }
         }
     };
-    on_input._self = self;
+    on_input.editor = self;
 
     // Ask user for search query and free its resources
     const search_string = try self.status_bar.prompt(self.gpa, on_input.wrapper);
@@ -287,7 +301,6 @@ fn find(self: *Editor) !void {
     if (search_string == .canceled) {
         self.text_x = old_x;
         self.text_y = old_y;
-        self.row_offset = old_offset;
     }
 }
 

@@ -91,7 +91,7 @@ pub const TextRow = struct {
 
     /// Given the index of a character inside the `raw` text,
     /// returns the corresponding index from the `renderable` text.
-    pub fn getIdx(self: TextRow, idx: u32) u32 {
+    pub fn getIdx(self: TextRow, idx: usize) u32 {
         var offset: u32 = 0;
         var i: usize = 0;
         while (i < idx) : (i += 1) {
@@ -100,6 +100,20 @@ pub const TextRow = struct {
             offset += 1;
         }
         return offset;
+    }
+
+    /// Returns the index of the renderable character from a given raw index `idx`
+    pub fn fromRenderIdx(self: TextRow, idx: usize) u32 {
+        var render_x: u32 = 0;
+        var i: u32 = 0;
+        while (i < self.len()) : (i += 1) {
+            if (self.raw.items[i] == '\t')
+                render_x += 3 - (render_x % 4);
+            render_x += 1;
+
+            if (render_x > idx) return i;
+        }
+        return i;
     }
 
     /// Inserts a character at index `idx` and updates the renderable text
