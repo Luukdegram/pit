@@ -75,7 +75,7 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     }
 
     while (!should_quit.load(.SeqCst)) {
-        try self.update();
+        try self.update(.update);
         const key = try self.readInput();
 
         if (self.state == .select)
@@ -151,7 +151,7 @@ pub fn readInput(self: Editor) !Key {
 }
 
 /// Handles input when the editor's state is 'select'
-fn onSelect(self: *Editor, key: Key) (Error || TextBuffer.SaveError || os.ReadError || error{EndOfStream} || Key.UtfError)!void {
+fn onSelect(self: *Editor, key: Key) !void {
     switch (key) {
         Key.fromChar('h'),
         Key.fromChar('j'),
@@ -229,7 +229,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
     }
 }
 
-/// onQuit empties the terminal window
+/// quit empties the terminal window and quits the editor
 fn quit() Error!void {
     try term.sequence("2J");
     try term.sequence("H");
@@ -270,6 +270,8 @@ fn find(self: *Editor) !void {
         var editor: *Editor = undefined;
 
         var hl_row: ?*TextBuffer.TextRow = null;
+        var x: u32 = 0;
+        var y: u32 = 0;
 
         fn wrapper(input: []const u21, key: Key) void {
             if (Key.fromChar(27) == key and hl_row != null) {
@@ -278,11 +280,13 @@ fn find(self: *Editor) !void {
             } else if (input.len == 0 and hl_row != null) {
                 // user backspaced all input, so clear highlighting
                 hl_row.?.update(editor.gpa) catch {};
+                editor.text_y = y;
+                editor.text_x = x;
             } else for (editor.buffer().text.items) |*row, i| {
                 // search through text
                 if (std.mem.indexOf(u21, row.renderable, input)) |index| {
                     editor.text_y = @intCast(u32, i);
-                    editor.text_x = row.fromRenderIdx(index);
+                    editor.text_x = row.fromRenderIdx(index + input.len);
 
                     // in case user used a backspace, this will reset the previous highlighting
                     row.update(editor.gpa) catch {};
@@ -297,6 +301,8 @@ fn find(self: *Editor) !void {
         }
     };
     on_input.editor = self;
+    on_input.x = old_x;
+    on_input.y = old_y;
 
     // Ask user for search query and free its resources
     const search_string = try self.status_bar.prompt(self.gpa, on_input.wrapper);
@@ -310,7 +316,7 @@ fn find(self: *Editor) !void {
 
 /// Clears the screen and sets the cursor at the top
 /// as well as write tildes (~) on each row
-pub fn update(self: *Editor) !void {
+pub fn update(self: *Editor, cursor_state: enum { ignore, update }) !void {
     try self.scroll();
     try term.cursor.hide();
     try term.sequence("H");
@@ -318,9 +324,11 @@ pub fn update(self: *Editor) !void {
     try self.render();
     try self.status_bar.render();
 
-    const y = self.text_y - self.row_offset;
-    const x = self.view_x - self.col_offset;
-    try term.cursor.set(y + 1, x + 1);
+    if (cursor_state == .update) {
+        const y = self.text_y - self.row_offset;
+        const x = self.view_x - self.col_offset;
+        try term.cursor.set(y + 1, x + 1);
+    }
 
     try term.cursor.show();
     try term.flush();
@@ -354,6 +362,9 @@ fn render(self: *Editor) !void {
 
                 try term.colored(line.color(index), cp[0..cp_len]);
             }
+
+            // back to regular colours
+            try term.sequence("39m");
         }
 
         try term.sequence("K");
@@ -442,7 +453,7 @@ fn open(self: *Editor, file_path: []const u8) !void {
     while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
         // Check if the line contains a '\r'. If true, cut it off
         const real_line = blk: {
-            if (line.len == 0) continue;
+            if (line.len == 0) break :blk &[_]u8{};
 
             const idx = line.len - 1;
             break :blk if (line[idx] == '\r') line[0..idx] else line;
@@ -459,8 +470,6 @@ fn open(self: *Editor, file_path: []const u8) !void {
 
 /// Handle automatic scrolling based on cursor position
 fn scroll(self: *Editor) Error!void {
-    const old_pos = self.view_x;
-
     self.view_x = if (self.text_y < self.buffer().len())
         self.buffer().get(self.text_y).getIdx(self.text_x)
     else
@@ -468,7 +477,7 @@ fn scroll(self: *Editor) Error!void {
 
     // get the x position based on utf 8 sequence lengths
     if (self.view_x != 0) {
-        self.view_x = self.buffer().utf8Pos(self.text_y, 0, self.text_x);
+        self.view_x = self.buffer().utf8Pos(self.text_y, self.text_x);
     }
 
     if (self.text_y < self.row_offset) {

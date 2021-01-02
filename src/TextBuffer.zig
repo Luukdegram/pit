@@ -73,12 +73,26 @@ pub const TextRow = struct {
 
     /// Sets the highlighting pieces of the renderable text
     fn highlight(self: *TextRow, gpa: *Allocator) error{OutOfMemory}!void {
-        self.highlights = try gpa.realloc(self.highlights, self.renderable.len);
+        if (self.highlights.len != self.renderable.len)
+            self.highlights = try gpa.realloc(self.highlights, self.renderable.len);
+        std.mem.set(Color, self.highlights, .default);
 
-        for (self.renderable) |c, i| self.highlights[i] = if (c < 256 and std.ascii.isDigit(@intCast(u8, c)))
-            .green
-        else
-            .default;
+        for (self.renderable) |c, i| {
+            self.highlights[i] = switch (charKind(c)) {
+                .digit => .blue,
+                .special => .magenta,
+                .char => .default,
+            };
+        }
+    }
+
+    /// Returns the character kind for a given code point. Used for highlighting
+    fn charKind(c: u21) enum { char, digit, special } {
+        return switch (c) {
+            '0'...'9' => .digit,
+            '{', '}', '(', ')', '-', '+', '/', '"', '\'', '&', '%', '^', ' ', '~', ',', '.', '<', '>', '[', ']', '=' => .special,
+            else => .char,
+        };
     }
 
     /// Returns the `Color` of the character at the given index `idx`
@@ -244,7 +258,7 @@ pub fn delete(self: *TextBuffer, gpa: *Allocator, idx: u32) error{OutOfMemory}!v
 /// Returns the utf8 encoded character's position of the character found at row `row_idx` and index `col_idx`
 /// This expects `col_idx` to be that of the rendered x's position.
 /// `n` is the difference between an initial position and this position
-pub fn utf8Pos(self: *TextBuffer, row_idx: u32, n: i32, col_idx: u32) u32 {
+pub fn utf8Pos(self: *TextBuffer, row_idx: u32, col_idx: u32) u32 {
     const row = self.get(row_idx);
     const idx = row.getIdx(col_idx);
 
