@@ -117,8 +117,6 @@ pub fn read() !u21 {
     if (len == 0) return error.EndOfStream;
 
     if (buffer[0] == '\x1b') return '\x1b';
-    std.debug.print("Len: {} {}\n", .{ len, buffer[0..len] });
-    std.debug.print("test\n", .{});
 
     const unicode = std.unicode;
     return switch (len) {

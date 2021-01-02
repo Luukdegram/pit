@@ -241,6 +241,27 @@ pub fn delete(self: *TextBuffer, gpa: *Allocator, idx: u32) error{OutOfMemory}!v
     row.deinit(gpa);
 }
 
+/// Returns the utf8 encoded character's position of the character found at row `row_idx` and index `col_idx`
+/// This expects `col_idx` to be that of the rendered x's position.
+/// `n` is the difference between an initial position and this position
+pub fn utf8Pos(self: *TextBuffer, row_idx: u32, n: i32, col_idx: u32) u32 {
+    const row = self.get(row_idx);
+    const idx = row.getIdx(col_idx);
+
+    var pos: u32 = 0;
+    for (row.renderable[0..idx]) |c| {
+        var pc = c;
+        var width: u32 = 0;
+        while (pc > 0) {
+            width += 1;
+            pc >>= 8;
+        }
+
+        pos += width;
+    }
+    return pos;
+}
+
 /// Errorset for saving a file
 pub const SaveError = error{
     UnknownPath,

@@ -459,10 +459,17 @@ fn open(self: *Editor, file_path: []const u8) !void {
 
 /// Handle automatic scrolling based on cursor position
 fn scroll(self: *Editor) Error!void {
+    const old_pos = self.view_x;
+
     self.view_x = if (self.text_y < self.buffer().len())
         self.buffer().get(self.text_y).getIdx(self.text_x)
     else
         0;
+
+    // get the x position based on utf 8 sequence lengths
+    if (self.view_x != 0) {
+        self.view_x = self.buffer().utf8Pos(self.text_y, 0, self.text_x);
+    }
 
     if (self.text_y < self.row_offset) {
         self.row_offset = self.text_y;
