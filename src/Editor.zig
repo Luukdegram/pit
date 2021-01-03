@@ -338,6 +338,8 @@ pub fn update(self: *Editor, cursor_state: enum { ignore, update }) !void {
 
 /// Draws the contents of the buffer in the terminal
 fn render(self: *Editor) !void {
+    const nr_len = try self.lineNumberLength();
+
     var i: usize = 0;
     while (i < self.height) : (i += 1) {
         const offset = i + self.row_offset;
@@ -349,6 +351,10 @@ fn render(self: *Editor) !void {
                 try term.write("~");
         } else {
             const line = self.buffer().get(offset);
+
+            try renderLineNumber(offset + 1, nr_len);
+            // seperator
+            try term.write(" ");
 
             const len = blk: {
                 if (line.renderLen() - self.col_offset < 0) break :blk 0;
@@ -372,6 +378,25 @@ fn render(self: *Editor) !void {
         try term.sequence("K");
         try term.write("\r\n");
     }
+}
+
+/// Determines the amount of slots required to render all line numbers
+fn lineNumberLength(self: *Editor) !usize {
+    const len = self.buffer().len();
+
+    var buf: [100]u8 = undefined;
+    const fmt = try std.fmt.bufPrint(&buf, "{d}", .{len});
+    return fmt.len + 1;
+}
+
+/// Renders the given line number until `len` is reached
+fn renderLineNumber(idx: usize, len: usize) !void {
+    var buf: [100]u8 = undefined;
+    const fmt = try std.fmt.bufPrint(&buf, "{d}", .{idx});
+
+    var i: usize = 0;
+    while (i + fmt.len < len) : (i += 1) try term.write(" ");
+    try term.write(fmt);
 }
 
 /// Shows the startup message if no file buffer was opened
@@ -481,6 +506,8 @@ fn scroll(self: *Editor) Error!void {
     if (self.view_x != 0) {
         self.view_x = self.buffer().utf8Pos(self.text_y, self.text_x);
     }
+
+    self.view_x += @intCast(u32, try self.lineNumberLength()) + 1;
 
     if (self.text_y < self.row_offset) {
         self.row_offset = self.text_y;
