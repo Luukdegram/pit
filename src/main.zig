@@ -1,6 +1,9 @@
 const std = @import("std");
 const Editor = @import("Editor.zig");
 
+/// Overwrite std's logger
+pub const log = @import("debug.zig").log;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

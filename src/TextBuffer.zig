@@ -178,6 +178,7 @@ pub const TextRow = struct {
     /// Appends a slice at index `idx`
     pub fn appendSlice(self: *TextRow, gpa: *Allocator, idx: u32, slice: []const u21) error{OutOfMemory}!void {
         try self.raw.insertSlice(gpa, idx, slice);
+        self.is_dirty = true;
 
         try self.update(gpa);
     }
@@ -303,7 +304,9 @@ pub const SaveError = error{
 } || fs.File.OpenError || fs.File.WriteError;
 
 /// Saves the contents of the buffer to the file located at `file_path`
+/// This is NoOp when `kind` of the `TextBuffer` is `debug`
 pub fn save(self: TextBuffer) SaveError!void {
+    if (self.kind == .debug) return;
     const path = self.file_path orelse return error.UnknownPath;
 
     const file = try fs.cwd().createFile(path, .{});

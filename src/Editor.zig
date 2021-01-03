@@ -2,6 +2,7 @@ const std = @import("std");
 const term = @import("term.zig");
 const TextBuffer = @import("TextBuffer.zig");
 const StatusBar = @import("StatusBar.zig");
+const debug = @import("debug.zig");
 const os = std.os;
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
@@ -45,6 +46,8 @@ active: u32 = 0,
 state: enum { select, insert } = .select,
 /// Status bar that shows a status line, optional message and can trigger a prompt
 status_bar: *StatusBar,
+/// Whether to have the debug buffer open or not
+show_debug: bool = false,
 
 /// Atomic bool used to shutdown the editor safely
 var should_quit = std.atomic.Bool.init(false);
@@ -55,6 +58,9 @@ var should_quit = std.atomic.Bool.init(false);
 pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     try term.init();
     defer term.deinit();
+
+    debug.init(gpa);
+    defer debug.deinit();
 
     const size = try term.size();
 
@@ -104,6 +110,8 @@ fn deinit(self: *Editor) void {
 /// Asserts atleast 1 buffer exists and the
 /// `active` index is not out of bounds
 pub fn buffer(self: *Editor) *TextBuffer {
+    if (self.show_debug) return debug.get();
+
     std.debug.assert(self.buffers.items.len > 0);
     std.debug.assert(self.active < self.buffers.items.len);
     return &self.buffers.items[self.active];
@@ -167,6 +175,7 @@ fn onSelect(self: *Editor, key: Key) !void {
         => self.moveCursor(key),
         Key.fromChar(term.toCtrlKey('q')) => try quit(),
         Key.fromChar(term.toCtrlKey('s')) => try self.save(),
+        Key.fromChar(term.toCtrlKey('d')) => self.show_debug = !self.show_debug,
         Key.fromChar('/') => try self.find(),
         Key.fromChar('i') => self.state = .insert,
         Key.fromChar(':') => {
