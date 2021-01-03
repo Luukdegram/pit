@@ -109,36 +109,21 @@ pub fn buffer(self: *Editor) *TextBuffer {
 pub fn readInput(self: Editor) !Key {
     return while (true) {
         const esc = @intToEnum(Key, '\x1b');
-        const c = term.read() catch |err| switch (err) {
-            error.EndOfStream => continue,
-            else => return err,
-        };
+        var buf: [4]u8 = undefined;
+
+        const len = try term.reader().read(&buf);
+        if (len == 0) continue;
+
+        if (std.mem.eql(u8, &buf, "\x1b")) return esc;
 
         // handle escape sequences
-        if (c == '\x1b') {
-            var buf: [3]u21 = undefined;
-
-            buf[0] = term.read() catch |err| switch (err) {
-                error.EndOfStream => return esc,
-                else => return err,
-            };
-
-            buf[1] = term.read() catch |err| switch (err) {
-                error.EndOfStream => return esc,
-                else => return err,
-            };
-
-            if (buf[0] == '[') {
-                if (buf[1] >= '0' and buf[1] <= '9') {
-                    buf[2] = term.read() catch |err| switch (err) {
-                        error.EndOfStream => return esc,
-                        else => return err,
-                    };
-
-                    if (buf[2] == '~') return Key.fromEscChar(buf[1]);
-                } else return Key.fromEscChar(buf[1]);
-            } else if (buf[0] == 'O') {
-                return switch (buf[1]) {
+        if (buf[0] == '\x1b') {
+            if (buf[1] == '[') {
+                if (buf[2] >= '0' and buf[1] <= '9') {
+                    if (buf[3] == '~') return Key.fromEscChar(buf[2]);
+                } else return Key.fromEscChar(buf[2]);
+            } else if (buf[1] == 'O') {
+                return switch (buf[2]) {
                     'H' => Key.home,
                     'F' => Key.end,
                     else => esc,
@@ -146,7 +131,16 @@ pub fn readInput(self: Editor) !Key {
             }
         }
 
-        break @intToEnum(Key, c);
+        const unicode = std.unicode;
+        const c = switch (len) {
+            1 => @as(u21, buf[0]),
+            2 => unicode.utf8Decode2(buf[0..len]),
+            3 => unicode.utf8Decode3(buf[0..len]),
+            4 => unicode.utf8Decode4(buf[0..len]),
+            else => unreachable,
+        };
+
+        break Key.fromChar(try c);
     } else unreachable;
 }
 
