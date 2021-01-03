@@ -287,6 +287,10 @@ fn find(self: *Editor) !void {
             } else for (editor.buffer().text.items) |*row, i| {
                 // search through text
                 if (std.mem.indexOf(u21, row.renderable, input)) |index| {
+                    if (hl_row != null and hl_row != row) {
+                        hl_row.?.update(editor.gpa) catch {};
+                    }
+
                     editor.text_y = @intCast(u32, i);
                     editor.text_x = row.fromRenderIdx(index + input.len);
 
