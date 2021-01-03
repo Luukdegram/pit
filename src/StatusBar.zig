@@ -35,8 +35,6 @@ const PromptResult = union(enum) {
 
 /// Returns a new instance of `StatusBar`
 pub fn init(editor: *Editor) StatusBar {
-    // decrease the height by 1 for the status line
-    editor.height -= 1;
     return .{ .editor = editor, .message = null };
 }
 
@@ -102,16 +100,12 @@ pub fn prompt(self: *StatusBar, gpa: *Allocator, on_input: ?fn ([]const u21, Key
     } else unreachable;
 }
 
-/// Renders the status bar
-pub fn render(self: *StatusBar) !void {
-    try self.statusMessage();
-    try self.statusLine();
-}
-
 /// Draws a status bar with inverted colors
-fn statusLine(self: *StatusBar) !void {
+pub fn render(self: *StatusBar) !void {
     // First invert the colors
     try term.sequence("7m");
+
+    if (self.message) |msg| try term.write(msg);
 
     const dirty_message = if (self.editor.buffer().isDirty())
         " +"
@@ -128,8 +122,13 @@ fn statusLine(self: *StatusBar) !void {
         self.editor.text_x + 1,
     });
 
+    const whitespace_len = self.editor.width - status_msg.len - if (self.message) |msg|
+        msg.len
+    else
+        0;
+
     var i: usize = 0;
-    while (i < self.editor.width - status_msg.len) : (i += 1)
+    while (i < whitespace_len) : (i += 1)
         try term.write(" ");
 
     // write our status message at the end
@@ -139,34 +138,14 @@ fn statusLine(self: *StatusBar) !void {
     try term.sequence("m");
 }
 
-/// Renders a status message if set
-fn statusMessage(self: StatusBar) !void {
-    if (self.message) |msg| {
-        try term.write(msg);
-        try term.sequence("K");
-        try term.write("\r\n");
-    }
-}
-
 /// Enables a message in the editor view with the given `message`
 pub fn showMessage(self: *StatusBar, message: []const u8) void {
-    // decrease the terminal buffer height by 1 as we use that space
-    // to write our status message but only if no message is being displayed
-    if (self.message == null)
-        self.editor.height -= 1;
     self.message = message;
 }
 
 /// Hides the status message if it's currently enabled
 pub fn hideMessage(self: *StatusBar) void {
-    // only if enabled
-    if (self.message) |_| {
-        self.message = null;
-
-        // Increase the height back by 1 as we don't require
-        // the terminal space any longer
-        self.editor.height += 1;
-    }
+    self.message = null;
 }
 
 /// Returns the length that the given codepoint requires on the screen

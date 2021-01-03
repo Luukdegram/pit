@@ -60,7 +60,8 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     var self = Editor{
         .width = size.width,
-        .height = size.height,
+        // -1 height for status line
+        .height = size.height - 1,
         .gpa = gpa,
         .buffers = std.ArrayListUnmanaged(TextBuffer){},
         .status_bar = undefined,
@@ -82,6 +83,10 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
             try self.onSelect(key)
         else
             try self.onInsert(key);
+
+        const new_size = try term.size();
+        self.height = new_size.height - 1;
+        self.width = new_size.width;
     }
 }
 
@@ -167,6 +172,9 @@ fn onSelect(self: *Editor, key: Key) !void {
         Key.fromChar(':') => {
             const cmd = try self.status_bar.prompt(self.gpa, null);
             defer cmd.deinit(self.gpa);
+
+            if (cmd == .canceled) return;
+
             try self.buffer().get(self.text_y).appendSlice(self.gpa, self.text_x, cmd.string);
         },
         else => {},
