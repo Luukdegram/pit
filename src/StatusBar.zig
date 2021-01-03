@@ -112,7 +112,10 @@ pub fn render(self: *StatusBar) !void {
     else
         "";
 
-    const file_name = self.editor.buffer().file_path orelse "[Empty buffer]";
+    const file_name = if (self.editor.buffer().kind == .debug)
+        "[DEBUG]"
+    else
+        self.editor.buffer().file_path orelse "[Empty buffer]";
 
     var buf: [4096 * 10]u8 = undefined;
     const status_msg = try std.fmt.bufPrint(&buf, "{s}{s} {d}:{d}", .{
