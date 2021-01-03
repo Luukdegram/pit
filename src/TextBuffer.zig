@@ -193,37 +193,56 @@ pub const TextRow = struct {
 text: std.ArrayListUnmanaged(TextRow),
 /// File name that the buffer corresponds to
 file_path: ?[]const u8 = null,
+/// The type of buffer it is. This determines whether the buffer
+/// can be saved.
+kind: Kind,
+/// Allocator for each buffer that is used to allocate memory
+/// for the TextRows and its members
+gpa: *Allocator,
+
+/// Kind provides a Buffer a way to tell its usability
+pub const Kind = enum {
+    /// The text buffer is a file buffer that has a known file path
+    file,
+    /// Debug buffer that the editor but also other processes can write to
+    /// without destroying the terminal layout
+    debug,
+    /// Empty buffer that has no known file path
+    scratch,
+};
 
 /// Creates a new instance of `TextBuffer`
-pub fn init(file_name: ?[]const u8) TextBuffer {
+pub fn init(gpa: *Allocator, file_name: ?[]const u8) TextBuffer {
     return .{
+        .gpa = gpa,
         .text = std.ArrayListUnmanaged(TextRow){},
         .file_path = file_name,
+        .kind = if (file_name == null) .scratch else .file,
     };
 }
 
 /// Frees all memory of the buffer
-pub fn deinit(self: *TextBuffer, gpa: *Allocator) void {
-    for (self.text.items) |*row| row.deinit(gpa);
-    self.text.deinit(gpa);
+pub fn deinit(self: *TextBuffer) void {
+    for (self.text.items) |*row| row.deinit(self.gpa);
+    self.text.deinit(self.gpa);
     self.* = undefined;
 }
 
 /// Appends a new `TextRow` onto the buffer from the given `input` text
-pub fn insert(self: *TextBuffer, comptime T: type, gpa: *Allocator, idx: u32, input: []const T) !void {
+pub fn insert(self: *TextBuffer, comptime T: type, idx: u32, input: []const T) !void {
     var row = if (T == u8)
-        try TextRow.init(gpa, input)
+        try TextRow.init(self.gpa, input)
     else if (T == u21)
         TextRow{
-            .raw = std.ArrayList(T).fromOwnedSlice(gpa, try gpa.dupe(T, input)).toUnmanaged(),
+            .raw = std.ArrayList(T).fromOwnedSlice(self.gpa, try self.gpa.dupe(T, input)).toUnmanaged(),
             .renderable = &[_]T{},
             .highlights = &[_]Color{},
         }
     else
         @compileError("Unsupported type. T must be u8 or u21");
 
-    if (input.len > 0) try row.update(gpa);
-    try self.text.insert(gpa, idx, row);
+    if (input.len > 0) try row.update(self.gpa);
+    try self.text.insert(self.gpa, idx, row);
 }
 
 /// Returns the `TextRow` at index `idx`
@@ -247,12 +266,12 @@ pub fn isDirty(self: TextBuffer) bool {
 }
 
 /// Removes the row at index `idx`
-pub fn delete(self: *TextBuffer, gpa: *Allocator, idx: u32) error{OutOfMemory}!void {
+pub fn delete(self: *TextBuffer, idx: u32) error{OutOfMemory}!void {
     if (idx == self.len()) return;
     var row = self.text.orderedRemove(idx);
     const new_row = self.get(idx - 1);
-    try new_row.appendSlice(gpa, new_row.len(), row.raw.items);
-    row.deinit(gpa);
+    try new_row.appendSlice(self.gpa, new_row.len(), row.raw.items);
+    row.deinit(self.gpa);
 }
 
 /// Returns the utf8 encoded character's position of the character found at row `row_idx` and index `col_idx`
@@ -292,7 +311,6 @@ pub fn save(self: TextBuffer) SaveError!void {
 
     const writer = file.writer();
     for (self.text.items) |*row| {
-        // try writer.writeAll(row.raw.items);
         for (row.raw.items) |cp, i| {
             var buf: [4]u8 = undefined;
             const cp_len = try std.unicode.utf8Encode(cp, &buf);

@@ -72,7 +72,7 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 
     // Open the file path if given. If not, open a new clean TextBuffer
     if (with_file) |path| try self.open(try gpa.dupe(u8, path)) else {
-        try self.buffers.append(gpa, TextBuffer.init(null));
+        try self.buffers.append(gpa, TextBuffer.init(gpa, null));
     }
 
     while (!should_quit.load(.SeqCst)) {
@@ -94,7 +94,7 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
 fn deinit(self: *Editor) void {
     for (self.buffers.items) |*b| {
         if (b.file_path) |p| self.gpa.free(p);
-        b.deinit(self.gpa);
+        b.deinit();
     }
     self.buffers.deinit(self.gpa);
     self.* = undefined;
@@ -188,10 +188,10 @@ fn onInsert(self: *Editor, key: Key) Error!void {
         Key.fromChar('\r') => {
             const buf = self.buffer();
             if (self.text_x == 0)
-                try buf.insert(u8, self.gpa, self.text_y, "")
+                try buf.insert(u8, self.text_y, "")
             else {
                 const row = buf.get(self.text_y);
-                try buf.insert(u21, self.gpa, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
+                try buf.insert(u21, self.text_y + 1, row.raw.items[self.text_x..row.len()]);
                 try row.resize(self.gpa, self.text_x);
             }
 
@@ -208,7 +208,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
                 self.text_x -= 1;
             } else if (self.text_y > 0) {
                 self.text_x = buf.get(self.text_y - 1).len();
-                try buf.delete(self.gpa, self.text_y);
+                try buf.delete(self.text_y);
                 self.text_y -= 1;
             }
         },
@@ -219,7 +219,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
-                try buf.insert(u8, self.gpa, self.text_y, "");
+                try buf.insert(u8, self.text_y, "");
             }
 
             const row = buf.get(self.text_y);
@@ -249,11 +249,20 @@ fn save(self: *Editor) !void {
                 defer self.status_bar.hideMessage();
 
                 const result = try self.status_bar.prompt(self.gpa, null);
+                defer result.deinit(self.gpa);
 
                 if (result == .canceled) return;
 
-                // self.buffer().file_path = result.string;
-                self.buffer().file_path = "test.txt";
+                var string = std.ArrayList(u8).init(self.gpa);
+                errdefer string.deinit();
+
+                for (result.string) |cp| {
+                    var buf: [4]u8 = undefined;
+                    const cp_len = std.unicode.utf8Encode(cp, &buf) catch unreachable;
+                    try string.writer().writeAll(buf[0..cp_len]);
+                }
+
+                self.buffer().file_path = string.toOwnedSlice();
                 continue;
             },
             else => return err,
@@ -478,8 +487,8 @@ fn open(self: *Editor, file_path: []const u8) !void {
 
     // create a temporary buffer of 40Kb where the reader will read into
     var buf: [4096 * 10]u8 = undefined;
-    var text_buffer = TextBuffer.init(file_path);
-    errdefer text_buffer.deinit(self.gpa);
+    var text_buffer = TextBuffer.init(self.gpa, file_path);
+    errdefer text_buffer.deinit();
 
     while (try file.reader().readUntilDelimiterOrEof(&buf, '\n')) |line| {
         // Check if the line contains a '\r'. If true, cut it off
@@ -491,7 +500,7 @@ fn open(self: *Editor, file_path: []const u8) !void {
         };
 
         // append the line to our text buffer
-        try text_buffer.insert(u8, self.gpa, text_buffer.len(), real_line);
+        try text_buffer.insert(u8, text_buffer.len(), real_line);
     }
 
     try self.buffers.append(self.gpa, text_buffer);
