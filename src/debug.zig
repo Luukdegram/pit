@@ -79,3 +79,10 @@ fn write(ctx: *TextBuffer, bytes: []const u8) !usize {
 
     return len;
 }
+
+/// Overwrite the default panic handle to first reset the terminal
+/// so that stack traces are printed nicely to stderr
+pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace) noreturn {
+    @import("term.zig").deinit();
+    std.debug.panicExtra(trace, @returnAddress(), "{}", .{msg});
+}

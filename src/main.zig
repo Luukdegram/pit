@@ -3,6 +3,8 @@ const Editor = @import("Editor.zig");
 
 /// Overwrite std's logger
 pub const log = @import("debug.zig").log;
+/// Overwrite std's panic handler
+pub const panic = @import("debug.zig").panic;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
