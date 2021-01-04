@@ -215,10 +215,10 @@ pub const Kind = enum {
 /// Creates a new instance of `TextBuffer`
 pub fn init(gpa: *Allocator, file_name: ?[]const u8) TextBuffer {
     return .{
-        .gpa = gpa,
-        .text = std.ArrayListUnmanaged(TextRow){},
         .file_path = file_name,
+        .gpa = gpa,
         .kind = if (file_name == null) .scratch else .file,
+        .text = std.ArrayListUnmanaged(TextRow){},
     };
 }
 

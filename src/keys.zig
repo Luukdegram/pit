@@ -3,16 +3,16 @@ const std = @import("std");
 /// Keys mapped from utf-8 codepoints to Pit keys
 pub const Key = enum(u32) {
     // from here we can insert our own keys as they're no longer codepoints
-    arrow_left = 2097152,
+    arrow_down = 2097152,
+    arrow_left,
     arrow_right,
     arrow_up,
-    arrow_down,
-    home,
-    end,
     delete,
+    end,
+    home,
     insert,
-    page_up,
     page_down,
+    page_up,
     _,
 
     pub const UtfError = error{Utf8EncodeFailed};

@@ -11,8 +11,8 @@ const Editor = @This();
 
 /// Error represents any error that can occur
 pub const Error = error{
-    OutOfMemory,
     InvalidUtf8,
+    OutOfMemory,
 } || os.WriteError;
 
 usingnamespace @import("keys.zig");
@@ -65,12 +65,11 @@ pub fn run(gpa: *Allocator, with_file: ?[]const u8) !void {
     const size = try term.size();
 
     var self = Editor{
-        .width = size.width,
-        // -1 height for status line
-        .height = size.height - 1,
-        .gpa = gpa,
         .buffers = std.ArrayListUnmanaged(TextBuffer){},
+        .gpa = gpa,
+        .height = size.height - 1,
         .status_bar = undefined,
+        .width = size.width,
     };
     defer self.deinit();
 
@@ -168,10 +167,10 @@ fn onSelect(self: *Editor, key: Key) !void {
         .arrow_left,
         .arrow_right,
         .arrow_up,
-        .home,
         .end,
-        .page_up,
+        .home,
         .page_down,
+        .page_up,
         => self.moveCursor(key),
         Key.fromChar(term.toCtrlKey('q')) => try quit(),
         Key.fromChar(term.toCtrlKey('s')) => try self.save(),
