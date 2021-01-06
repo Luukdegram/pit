@@ -44,18 +44,18 @@ fn match(pattern: []const u21, text: []const u21) bool {
     };
 
     if (text.len == 0) return false;
-
+    if (pattern[0] == '(') return matchGroup(pattern, text);
     return matchOne(pattern[0], text[0]) and match(pattern[1..], text[1..]);
 }
 
 /// Checks for every element in `text` to determine if it matches `pattern`
 pub fn search(self: *Regex, text: []const u21) bool {
     if (text.len == 0) return true;
-    if (self.pattern.len > 1 and pattern[0] == '^') return match(pattern[1..], text);
+    if (self.pattern.len > 1 and self.pattern[0] == '^') return match(self.pattern[1..], text);
 
     return for (text) |_, i| {
-        if (!match(pattern, text[i..])) break false;
-    } else true;
+        if (match(self.pattern, text[i..])) break true;
+    } else false;
 }
 
 /// Checks if the given `text` codepoint slice matches with the '?' regex pattern
@@ -70,6 +70,24 @@ fn matchStar(pattern: []const u21, text: []const u21) bool {
         match(pattern[2..], text);
 }
 
+fn matchGroup(pattern: []const u21, text: []const u21) bool {
+    const group_end = std.mem.indexOfScalar(u21, pattern, ')') orelse return false;
+    const group_pattern = pattern[1..group_end];
+
+    if (pattern.len > group_end + 1 and pattern[group_end + 1] == '?') {
+        const remainder = pattern[group_end + 2 ..];
+        return (match(group_pattern, text[0..group_pattern.len]) and match(remainder, text[group_pattern.len..])) or
+            match(remainder, text);
+    } else if (pattern.len > group_end + 1 and pattern[group_end + 1] == '*') {
+        const remainder = pattern[group_end + 2 ..];
+        return (match(group_pattern, text[0..group_pattern.len]) and match(pattern, text[group_pattern.len..])) or
+            match(remainder, text);
+    } else {
+        const remainder = pattern[group_end + 1 ..];
+        return (match(group_pattern, text[0..group_pattern.len]) and match(remainder, text[group_pattern.len..]));
+    }
+}
+
 fn testRegex(pattern: []const u8, text: []const u8) !bool {
     const alloc = std.testing.allocator;
 
@@ -82,7 +100,7 @@ fn testRegex(pattern: []const u8, text: []const u8) !bool {
     var it = (try std.unicode.Utf8View.init(text)).iterator();
     while (it.nextCodepoint()) |cp| try string.append(cp);
 
-    return regex.matches(string.items);
+    return regex.search(string.items);
 }
 
 test "Regex tests" {
@@ -102,6 +120,21 @@ test "Regex tests" {
         .{ "a*", "aaa", true },
         .{ "a*b", "aaaaab", true },
         .{ "a*b", "aaaaa", false },
+
+        // grouping
+        .{ "(the)", "the", true },
+        .{ "I like (the) movie", "I like the movie", true },
+        // ?
+        .{ "I like (the)? movie", "I like  movie", true },
+        .{ "I like (the)? movie", "I like the movie", true },
+        .{ "I like (the)? movie", "I like my movie", false },
+        // *
+        .{ "I like (the)* movie", "I like the movie", true },
+        .{ "I like (the)* movie", "I like  movie", true },
+        .{ "I like (the)*e movie", "I like the movie", false },
+        // multiple groups
+        .{ "I like (the)? (movie)* from (yesterday)*", "I like the movie from yesterday", true },
+        .{ "I like (the)? (movie)* from (yesterday)*", "I like  moviemoviemovie from yesterday", true },
     };
 
     inline for (cases) |case| {
