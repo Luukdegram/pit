@@ -30,29 +30,28 @@ pub fn matches(self: Regex, text: []const u21) bool {
 
 /// Matches a single codepoint
 fn matchOne(pattern: u21, text: u21) bool {
-    if (pattern == '.') return true;
-
-    return pattern == text;
+    return pattern == '.' or pattern == text;
 }
 
 /// Returns true when the given `text` codepoint slice matches the pattern given in `pattern`
 fn match(pattern: []const u21, text: []const u21) bool {
     if (pattern.len == 0) return true;
-    if (text.len == 0) return true;
     if (pattern[0] == '$' and text.len == 0) return true;
     if (pattern.len > 1) switch (pattern[1]) {
         '?' => return matchQuestion(pattern, text),
         '*' => return matchStar(pattern, text),
         else => {},
     };
-    if (pattern.len > 1 and pattern[1] == '?') return matchQuestion(pattern, text);
+
+    if (text.len == 0) return false;
 
     return matchOne(pattern[0], text[0]) and match(pattern[1..], text[1..]);
 }
 
 /// Checks for every element in `text` to determine if it matches `pattern`
-fn search(pattern: []const u21, text: []const u21) bool {
-    if (pattern[0] == '^') return match(pattern[1..], text);
+pub fn search(self: *Regex, text: []const u21) bool {
+    if (text.len == 0) return true;
+    if (self.pattern.len > 1 and pattern[0] == '^') return match(pattern[1..], text);
 
     return for (text) |_, i| {
         if (!match(pattern, text[i..])) break false;
@@ -61,19 +60,14 @@ fn search(pattern: []const u21, text: []const u21) bool {
 
 /// Checks if the given `text` codepoint slice matches with the '?' regex pattern
 fn matchQuestion(pattern: []const u21, text: []const u21) bool {
-    if (pattern.len < 3) return text.len == 0 or text[0] == pattern[0];
-    if (matchOne(pattern[0], text[0]) and match(pattern[2..], text[1..]))
-        return true;
-
-    return match(pattern[2..], text);
+    return ((text.len != 0 and matchOne(pattern[0], text[0])) and match(pattern[2..], text[1..])) or
+        match(pattern[2..], text);
 }
 
 /// Checks if the the given `text` codepoint slice matches with the '*' regex pattern
 fn matchStar(pattern: []const u21, text: []const u21) bool {
-    if (matchOne(pattern[0], text[0]) and match(pattern, text[1..]))
-        return true;
-
-    return match(pattern[2..], text);
+    return ((text.len != 0 and matchOne(pattern[0], text[0])) and match(pattern, text[1..])) or
+        match(pattern[2..], text);
 }
 
 fn testRegex(pattern: []const u8, text: []const u8) !bool {
@@ -95,12 +89,19 @@ test "Regex tests" {
     const cases = .{
         // simplest
         .{ "abc", "abc", true },
+        // . character
+        .{ "a.c", "abc", true },
         // ? chacter
         .{ "ab?c", "ac", true },
         .{ "a?b?c?", "abc", true },
         .{ "a?b?c?", "", true },
-        .{ "a?", "c", false },
+        .{ "a?", "c", true },
         .{ "a?", "a", true },
+        // * character
+        .{ "a*", "", true },
+        .{ "a*", "aaa", true },
+        .{ "a*b", "aaaaab", true },
+        .{ "a*b", "aaaaa", false },
     };
 
     inline for (cases) |case| {

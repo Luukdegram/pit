@@ -144,15 +144,14 @@ pub fn readInput(self: Editor) !Key {
         }
 
         const unicode = std.unicode;
-        const c = switch (len) {
-            1 => @as(u21, buf[0]),
-            2 => unicode.utf8Decode2(buf[0..len]),
-            3 => unicode.utf8Decode3(buf[0..len]),
-            4 => unicode.utf8Decode4(buf[0..len]),
-            else => unreachable,
-        };
 
-        break Key.fromChar(try c);
+        // if not valid unicode, simply return the first character as we are not able
+        // to decode it anyway
+        const seq_len = unicode.utf8ByteSequenceLength(buf[0]) catch return Key.fromChar(buf[0]);
+
+        const c = try unicode.utf8Decode(buf[0..seq_len]);
+
+        break Key.fromChar(c);
     } else unreachable;
 }
 
