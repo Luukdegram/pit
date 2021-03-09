@@ -222,7 +222,7 @@ fn onInsert(self: *Editor, key: Key) Error!void {
         // <esc> key
         Key.fromChar(27) => self.state = .select,
         // anything else
-        else => {
+        else => if (key.int() <= std.math.maxInt(u21)) {
             const buf = self.buffer();
 
             if (self.text_y == buf.len()) {
